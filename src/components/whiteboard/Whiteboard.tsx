@@ -19,6 +19,9 @@ import {
 import ShareModal from "./ShareModal";
 import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
+import { useToast } from "@/components/ui/use-toast";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 
 interface WhiteboardProps {
   boardId?: string;
@@ -81,6 +84,8 @@ const Whiteboard = ({
       cursor: { x: 300, y: 150 },
     },
   ]);
+  const { toast } = useToast();
+  const [showClearDialog, setShowClearDialog] = useState(false);
 
   const colors = [
     "#000000",
@@ -303,151 +308,259 @@ const Whiteboard = ({
   const clearCanvas = () => {
     setElements([]);
     saveToHistory();
+    toast({
+      title: "Canvas cleared",
+      description: "All elements have been removed from the board.",
+    });
+    setShowClearDialog(false);
   };
 
   // Save board
   const saveBoard = () => {
     // In a real app, this would save to a backend
     console.log("Saving board:", { boardId, elements });
-    // Show success message or toast
+    toast({
+      title: "Board saved!",
+      description: "Your whiteboard has been saved.",
+    });
   };
 
   return (
     <div className="h-screen flex bg-gray-50">
       {/* Sidebar Toolbar */}
-      <div className="w-16 bg-white border-r border-gray-200 flex flex-col items-center py-4 space-y-2">
+      <div className="w-16 bg-white border-r border-gray-200 flex flex-col items-center py-4 space-y-2" aria-label="Whiteboard toolbar">
         {/* Navigation */}
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={onBackToDashboard}
-          className="mb-4"
-        >
-          <ArrowLeft className="h-5 w-5" />
-        </Button>
-
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={onBackToDashboard}
+              className="mb-4 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              aria-label="Back to dashboard"
+              tabIndex={0}
+            >
+              <ArrowLeft className="h-5 w-5" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Back to dashboard</TooltipContent>
+        </Tooltip>
         <Separator className="w-8" />
-
         {/* Drawing Tools */}
-        <Button
-          variant={currentTool === "pen" ? "default" : "ghost"}
-          size="icon"
-          onClick={() => setCurrentTool("pen")}
-        >
-          <Pen className="h-5 w-5" />
-        </Button>
-
-        <Button
-          variant={currentTool === "rectangle" ? "default" : "ghost"}
-          size="icon"
-          onClick={() => setCurrentTool("rectangle")}
-        >
-          <Square className="h-5 w-5" />
-        </Button>
-
-        <Button
-          variant={currentTool === "circle" ? "default" : "ghost"}
-          size="icon"
-          onClick={() => setCurrentTool("circle")}
-        >
-          <Circle className="h-5 w-5" />
-        </Button>
-
-        <Button
-          variant={currentTool === "text" ? "default" : "ghost"}
-          size="icon"
-          onClick={() => setCurrentTool("text")}
-        >
-          <Type className="h-5 w-5" />
-        </Button>
-
-        <Button
-          variant={currentTool === "eraser" ? "default" : "ghost"}
-          size="icon"
-          onClick={() => setCurrentTool("eraser")}
-        >
-          <Eraser className="h-5 w-5" />
-        </Button>
-
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant={currentTool === "pen" ? "default" : "ghost"}
+              size="icon"
+              onClick={() => setCurrentTool("pen")}
+              aria-label="Pen tool"
+              tabIndex={0}
+              className="focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              <Pen className="h-5 w-5" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Pen</TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant={currentTool === "rectangle" ? "default" : "ghost"}
+              size="icon"
+              onClick={() => setCurrentTool("rectangle")}
+              aria-label="Rectangle tool"
+              tabIndex={0}
+              className="focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              <Square className="h-5 w-5" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Rectangle</TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant={currentTool === "circle" ? "default" : "ghost"}
+              size="icon"
+              onClick={() => setCurrentTool("circle")}
+              aria-label="Circle tool"
+              tabIndex={0}
+              className="focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              <Circle className="h-5 w-5" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Circle</TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant={currentTool === "text" ? "default" : "ghost"}
+              size="icon"
+              onClick={() => setCurrentTool("text")}
+              aria-label="Text tool"
+              tabIndex={0}
+              className="focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              <Type className="h-5 w-5" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Text</TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant={currentTool === "eraser" ? "default" : "ghost"}
+              size="icon"
+              onClick={() => setCurrentTool("eraser")}
+              aria-label="Eraser tool"
+              tabIndex={0}
+              className="focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              <Eraser className="h-5 w-5" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Eraser</TooltipContent>
+        </Tooltip>
         <Separator className="w-8" />
-
         {/* Colors */}
-        <div className="flex flex-col space-y-1">
+        <div className="flex flex-col space-y-1" aria-label="Color picker">
           {colors.map((color) => (
             <button
               key={color}
-              className={`w-6 h-6 rounded border-2 ${
+              className={`w-6 h-6 rounded border-2 focus:outline-none focus:ring-2 focus:ring-blue-500 ${
                 currentColor === color ? "border-gray-400" : "border-gray-200"
               }`}
               style={{ backgroundColor: color }}
               onClick={() => setCurrentColor(color)}
+              aria-label={`Select color ${color}`}
+              tabIndex={0}
             />
           ))}
         </div>
-
         <Separator className="w-8" />
-
         {/* Stroke Width */}
-        <div className="flex flex-col space-y-1">
+        <div className="flex flex-col space-y-1" aria-label="Stroke width picker">
           {strokeWidths.map((width) => (
-            <Button
-              key={width}
-              variant={strokeWidth === width ? "default" : "ghost"}
-              size="icon"
-              onClick={() => setStrokeWidth(width)}
-              className="w-8 h-8"
-            >
-              <div
-                className="rounded-full bg-current"
-                style={{
-                  width: `${Math.max(width, 2)}px`,
-                  height: `${Math.max(width, 2)}px`,
-                }}
-              />
-            </Button>
+            <Tooltip key={width}>
+              <TooltipTrigger asChild>
+                <Button
+                  variant={strokeWidth === width ? "default" : "ghost"}
+                  size="icon"
+                  onClick={() => setStrokeWidth(width)}
+                  className="w-8 h-8 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  aria-label={`Stroke width ${width}`}
+                  tabIndex={0}
+                >
+                  <div
+                    className="rounded-full bg-current"
+                    style={{
+                      width: `${Math.max(width, 2)}px`,
+                      height: `${Math.max(width, 2)}px`,
+                    }}
+                  />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>{`Stroke width ${width}`}</TooltipContent>
+            </Tooltip>
           ))}
         </div>
-
         <Separator className="w-8" />
-
         {/* Actions */}
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={undo}
-          disabled={historyIndex <= 0}
-        >
-          <Undo className="h-5 w-5" />
-        </Button>
-
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={redo}
-          disabled={historyIndex >= history.length - 1}
-        >
-          <Redo className="h-5 w-5" />
-        </Button>
-
-        <Button variant="ghost" size="icon" onClick={saveBoard}>
-          <Save className="h-5 w-5" />
-        </Button>
-
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={() => setShowShareModal(true)}
-        >
-          <Share2 className="h-5 w-5" />
-        </Button>
-
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={undo}
+              disabled={historyIndex <= 0}
+              aria-label="Undo"
+              tabIndex={0}
+              className="focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              <Undo className="h-5 w-5" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Undo</TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={redo}
+              disabled={historyIndex >= history.length - 1}
+              aria-label="Redo"
+              tabIndex={0}
+              className="focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              <Redo className="h-5 w-5" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Redo</TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={saveBoard}
+              aria-label="Save board"
+              tabIndex={0}
+              className="focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              <Save className="h-5 w-5" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Save</TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => setShowShareModal(true)}
+              aria-label="Share board"
+              tabIndex={0}
+              className="focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              <Share2 className="h-5 w-5" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Share</TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => setShowClearDialog(true)}
+              aria-label="Clear canvas"
+              tabIndex={0}
+              className="focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              <Minus className="h-5 w-5" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Clear</TooltipContent>
+        </Tooltip>
         {/* User Actions */}
-        <div className="flex-1" />
-        <Button variant="ghost" size="icon" onClick={onLogout}>
-          <LogOut className="h-5 w-5" />
-        </Button>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={onLogout}
+              aria-label="Log out"
+              tabIndex={0}
+              className="focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              <LogOut className="h-5 w-5" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Log out</TooltipContent>
+        </Tooltip>
       </div>
-
       {/* Main Canvas Area */}
       <div className="flex-1 flex flex-col">
         {/* Top Bar */}
@@ -458,7 +571,6 @@ const Whiteboard = ({
             </h1>
             <Badge variant="secondary">Auto-saved</Badge>
           </div>
-
           {/* Collaborators */}
           <div className="flex items-center space-x-2">
             <span className="text-sm text-gray-600 mr-2">
@@ -484,9 +596,8 @@ const Whiteboard = ({
             </Avatar>
           </div>
         </div>
-
         {/* Canvas Container */}
-        <div className="flex-1 relative overflow-hidden">
+        <div className="relative flex-1" aria-label="Whiteboard canvas area">
           <canvas
             ref={canvasRef}
             className="absolute inset-0 w-full h-full cursor-crosshair bg-white"
@@ -502,8 +613,10 @@ const Whiteboard = ({
                     ? "text"
                     : "crosshair",
             }}
+            role="region"
+            aria-label="Drawing canvas"
+            tabIndex={0}
           />
-
           {/* Collaborator Cursors */}
           {collaborators.map(
             (collaborator) =>
@@ -516,6 +629,7 @@ const Whiteboard = ({
                     top: collaborator.cursor.y,
                     transform: "translate(-2px, -2px)",
                   }}
+                  aria-label={`Collaborator cursor: ${collaborator.name}`}
                 >
                   <div
                     className="w-4 h-4 rounded-full border-2 border-white"
@@ -530,7 +644,6 @@ const Whiteboard = ({
                 </div>
               ),
           )}
-
           {/* Text Input Overlay */}
           {isTextMode && (
             <div
@@ -539,6 +652,7 @@ const Whiteboard = ({
                 left: textPosition.x,
                 top: textPosition.y - 30,
               }}
+              aria-label="Text input overlay"
             >
               <input
                 type="text"
@@ -560,12 +674,12 @@ const Whiteboard = ({
                   color: currentColor,
                   fontSize: `${strokeWidth * 8}px`,
                 }}
+                aria-label="Text input"
               />
             </div>
           )}
         </div>
       </div>
-
       {/* Share Modal */}
       <ShareModal
         open={showShareModal}
@@ -573,6 +687,23 @@ const Whiteboard = ({
         boardTitle="Untitled Board"
         boardId={boardId}
       />
+      {/* Clear Confirmation Dialog */}
+      <Dialog open={showClearDialog} onOpenChange={setShowClearDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Clear Canvas</DialogTitle>
+          </DialogHeader>
+          <p>Are you sure you want to clear the canvas? This action cannot be undone.</p>
+          <DialogFooter>
+            <Button variant="secondary" onClick={() => setShowClearDialog(false)}>
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={clearCanvas}>
+              Clear
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };

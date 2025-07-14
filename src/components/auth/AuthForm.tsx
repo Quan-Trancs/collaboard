@@ -18,6 +18,8 @@ import {
 } from "@/components/ui/form";
 import { useForm } from "react-hook-form";
 import { useToast } from "@/components/ui/use-toast";
+import { Eye, EyeOff } from "lucide-react";
+import { TooltipProvider } from "@/components/ui/tooltip";
 
 interface AuthFormProps {
   onAuthSuccess?: (user: { id: string; email: string; name: string }) => void;
@@ -33,6 +35,7 @@ const AuthForm = ({ onAuthSuccess }: AuthFormProps) => {
   const [isLogin, setIsLogin] = useState(true);
   const [isLoading, setIsLoading] = useState(false);
   const { toast } = useToast();
+  const [showPassword, setShowPassword] = useState(false);
 
   const form = useForm<FormData>({
     defaultValues: {
@@ -88,7 +91,7 @@ const AuthForm = ({ onAuthSuccess }: AuthFormProps) => {
         </CardHeader>
         <CardContent>
           <Form {...form}>
-            <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+            <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4" aria-busy={isLoading}>
               {!isLogin && (
                 <FormField
                   control={form.control}
@@ -96,9 +99,9 @@ const AuthForm = ({ onAuthSuccess }: AuthFormProps) => {
                   rules={{ required: "Name is required" }}
                   render={({ field }) => (
                     <FormItem>
-                      <FormLabel>Full Name</FormLabel>
+                      <FormLabel htmlFor="auth-name">Full Name</FormLabel>
                       <FormControl>
-                        <Input placeholder="John Doe" {...field} />
+                        <Input id="auth-name" placeholder="John Doe" autoComplete="name" {...field} />
                       </FormControl>
                       <FormMessage />
                     </FormItem>
@@ -118,11 +121,13 @@ const AuthForm = ({ onAuthSuccess }: AuthFormProps) => {
                 }}
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Email</FormLabel>
+                    <FormLabel htmlFor="auth-email">Email</FormLabel>
                     <FormControl>
                       <Input
+                        id="auth-email"
                         type="email"
                         placeholder="john@example.com"
+                        autoComplete="email"
                         {...field}
                       />
                     </FormControl>
@@ -143,20 +148,42 @@ const AuthForm = ({ onAuthSuccess }: AuthFormProps) => {
                 }}
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Password</FormLabel>
+                    <FormLabel htmlFor="auth-password">Password</FormLabel>
                     <FormControl>
-                      <Input
-                        type="password"
-                        placeholder="••••••••"
-                        {...field}
-                      />
+                      <div className="relative">
+                        <Input
+                          id="auth-password"
+                          type={showPassword ? "text" : "password"}
+                          placeholder="••••••••"
+                          autoComplete={isLogin ? "current-password" : "new-password"}
+                          {...field}
+                        />
+                        <button
+                          type="button"
+                          tabIndex={0}
+                          aria-label={showPassword ? "Hide password" : "Show password"}
+                          className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 rounded"
+                          onClick={() => setShowPassword((v) => !v)}
+                        >
+                          {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                        </button>
+                      </div>
                     </FormControl>
                     <FormMessage />
                   </FormItem>
                 )}
               />
 
-              <Button type="submit" className="w-full" disabled={isLoading}>
+              <Button type="submit" className="w-full flex items-center justify-center" disabled={isLoading}
+                tabIndex={0}
+                aria-busy={isLoading}
+              >
+                {isLoading && (
+                  <svg className="animate-spin h-4 w-4 mr-2 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"></path>
+                  </svg>
+                )}
                 {isLoading ? "Please wait..." : isLogin ? "Sign In" : "Sign Up"}
               </Button>
             </form>
@@ -166,13 +193,16 @@ const AuthForm = ({ onAuthSuccess }: AuthFormProps) => {
             <button
               type="button"
               onClick={() => setIsLogin(!isLogin)}
-              className="text-sm text-blue-600 hover:text-blue-500"
+              className="text-sm text-blue-600 hover:text-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 rounded"
+              tabIndex={0}
             >
               {isLogin
                 ? "Don't have an account? Sign up"
                 : "Already have an account? Sign in"}
             </button>
           </div>
+          {/* Toast area for screen readers */}
+          <div aria-live="polite" className="sr-only"></div>
         </CardContent>
       </Card>
     </div>

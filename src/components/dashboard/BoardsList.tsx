@@ -10,6 +10,8 @@ import {
 import { Input } from "@/components/ui/input";
 import { Plus, Search, Calendar, Users, MoreVertical } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
+import { useToast } from "@/components/ui/use-toast";
 
 interface Board {
   id: string;
@@ -69,6 +71,7 @@ const BoardsList = ({
         "https://images.unsplash.com/photo-1586281380349-632531db7ed4?w=400&q=80",
     },
   ]);
+  const { toast } = useToast();
 
   const filteredBoards = boards.filter(
     (board) =>
@@ -87,6 +90,10 @@ const BoardsList = ({
       isShared: false,
     };
     setBoards([newBoard, ...boards]);
+    toast({
+      title: "Board created!",
+      description: `A new board has been added to your dashboard.`,
+    });
     onCreateBoard?.();
   };
 
@@ -114,7 +121,8 @@ const BoardsList = ({
             </div>
             <Button
               onClick={handleCreateBoard}
-              className="flex items-center gap-2"
+              className="flex items-center gap-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              aria-label="Create new board"
             >
               <Plus className="h-4 w-4" />
               New Board
@@ -128,150 +136,181 @@ const BoardsList = ({
               placeholder="Search boards..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              className="pl-10"
+              className="pl-10 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              aria-label="Search boards"
             />
           </div>
         </div>
 
         {/* Stats */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-          <Card className="bg-white">
-            <CardContent className="p-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm font-medium text-gray-600">
-                    Total Boards
-                  </p>
-                  <p className="text-2xl font-bold text-gray-900">
-                    {boards.length}
-                  </p>
+        <section aria-label="Board statistics" className="mb-8">
+          <h2 className="sr-only">Board statistics</h2>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <Card className="bg-white">
+              <CardContent className="p-6">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm font-medium text-gray-600">
+                      Total Boards
+                    </p>
+                    <p className="text-2xl font-bold text-gray-900">
+                      {boards.length}
+                    </p>
+                  </div>
+                  <div className="h-12 w-12 bg-blue-100 rounded-lg flex items-center justify-center">
+                    <Plus className="h-6 w-6 text-blue-600" />
+                  </div>
                 </div>
-                <div className="h-12 w-12 bg-blue-100 rounded-lg flex items-center justify-center">
-                  <Plus className="h-6 w-6 text-blue-600" />
-                </div>
-              </div>
-            </CardContent>
-          </Card>
+              </CardContent>
+            </Card>
 
-          <Card className="bg-white">
-            <CardContent className="p-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm font-medium text-gray-600">
-                    Shared Boards
-                  </p>
-                  <p className="text-2xl font-bold text-gray-900">
-                    {boards.filter((b) => b.isShared).length}
-                  </p>
+            <Card className="bg-white">
+              <CardContent className="p-6">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm font-medium text-gray-600">
+                      Shared Boards
+                    </p>
+                    <p className="text-2xl font-bold text-gray-900">
+                      {boards.filter((b) => b.isShared).length}
+                    </p>
+                  </div>
+                  <div className="h-12 w-12 bg-green-100 rounded-lg flex items-center justify-center">
+                    <Users className="h-6 w-6 text-green-600" />
+                  </div>
                 </div>
-                <div className="h-12 w-12 bg-green-100 rounded-lg flex items-center justify-center">
-                  <Users className="h-6 w-6 text-green-600" />
-                </div>
-              </div>
-            </CardContent>
-          </Card>
+              </CardContent>
+            </Card>
 
-          <Card className="bg-white">
-            <CardContent className="p-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm font-medium text-gray-600">
-                    Collaborators
-                  </p>
-                  <p className="text-2xl font-bold text-gray-900">
-                    {boards.reduce((sum, b) => sum + b.collaborators, 0)}
-                  </p>
+            <Card className="bg-white">
+              <CardContent className="p-6">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm font-medium text-gray-600">
+                      Collaborators
+                    </p>
+                    <p className="text-2xl font-bold text-gray-900">
+                      {boards.reduce((sum, b) => sum + b.collaborators, 0)}
+                    </p>
+                  </div>
+                  <div className="h-12 w-12 bg-purple-100 rounded-lg flex items-center justify-center">
+                    <Users className="h-6 w-6 text-purple-600" />
+                  </div>
                 </div>
-                <div className="h-12 w-12 bg-purple-100 rounded-lg flex items-center justify-center">
-                  <Users className="h-6 w-6 text-purple-600" />
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-        </div>
+              </CardContent>
+            </Card>
+          </div>
+        </section>
 
         {/* Boards Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-          {filteredBoards.map((board) => (
-            <Card
-              key={board.id}
-              className="bg-white hover:shadow-lg transition-shadow cursor-pointer group"
-            >
-              <div onClick={() => onOpenBoard?.(board.id)} className="relative">
-                {/* Thumbnail */}
-                <div className="aspect-video bg-gray-100 rounded-t-lg overflow-hidden">
-                  {board.thumbnail ? (
-                    <img
-                      src={board.thumbnail}
-                      alt={board.title}
-                      className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
-                    />
-                  ) : (
-                    <div className="w-full h-full bg-gradient-to-br from-blue-100 to-purple-100 flex items-center justify-center">
-                      <Plus className="h-8 w-8 text-gray-400" />
+        <section aria-label="Boards list">
+          <h2 className="sr-only">Boards</h2>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+            {filteredBoards.map((board) => (
+              <Card
+                key={board.id}
+                className="bg-white hover:shadow-lg transition-shadow cursor-pointer group focus-within:ring-2 focus-within:ring-blue-500"
+                tabIndex={0}
+                role="button"
+                aria-label={`Open board: ${board.title}`}
+                onClick={() => onOpenBoard?.(board.id)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    onOpenBoard?.(board.id);
+                  }
+                }}
+              >
+                <div className="relative">
+                  {/* Thumbnail */}
+                  <div className="aspect-video bg-gray-100 rounded-t-lg overflow-hidden">
+                    {board.thumbnail ? (
+                      <img
+                        src={board.thumbnail}
+                        alt={board.title}
+                        className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
+                      />
+                    ) : (
+                      <div className="w-full h-full bg-gradient-to-br from-blue-100 to-purple-100 flex items-center justify-center">
+                        <Plus className="h-8 w-8 text-gray-400" />
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Content */}
+                  <CardContent className="p-4">
+                    <div className="flex items-start justify-between mb-2">
+                      <h3 className="font-semibold text-gray-900 truncate flex-1">
+                        {board.title}
+                      </h3>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity focus:opacity-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                            aria-label="Board options"
+                            tabIndex={0}
+                          >
+                            <MoreVertical className="h-4 w-4" />
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>More options</TooltipContent>
+                      </Tooltip>
                     </div>
-                  )}
+
+                    {board.description && (
+                      <p className="text-sm text-gray-600 mb-3 line-clamp-2">
+                        {board.description}
+                      </p>
+                    )}
+
+                    <div className="flex items-center justify-between text-xs text-gray-500">
+                      <div className="flex items-center gap-1">
+                        <Calendar className="h-3 w-3" />
+                        {formatDate(board.updatedAt)}
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        {board.isShared && (
+                          <Badge variant="secondary" className="text-xs">
+                            <Users className="h-3 w-3 mr-1" />
+                            {board.collaborators}
+                          </Badge>
+                        )}
+                      </div>
+                    </div>
+                  </CardContent>
                 </div>
+              </Card>
+            ))}
 
-                {/* Content */}
-                <CardContent className="p-4">
-                  <div className="flex items-start justify-between mb-2">
-                    <h3 className="font-semibold text-gray-900 truncate flex-1">
-                      {board.title}
-                    </h3>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity"
-                    >
-                      <MoreVertical className="h-4 w-4" />
-                    </Button>
-                  </div>
-
-                  {board.description && (
-                    <p className="text-sm text-gray-600 mb-3 line-clamp-2">
-                      {board.description}
-                    </p>
-                  )}
-
-                  <div className="flex items-center justify-between text-xs text-gray-500">
-                    <div className="flex items-center gap-1">
-                      <Calendar className="h-3 w-3" />
-                      {formatDate(board.updatedAt)}
-                    </div>
-
-                    <div className="flex items-center gap-2">
-                      {board.isShared && (
-                        <Badge variant="secondary" className="text-xs">
-                          <Users className="h-3 w-3 mr-1" />
-                          {board.collaborators}
-                        </Badge>
-                      )}
-                    </div>
-                  </div>
-                </CardContent>
-              </div>
+            {/* Create New Board Card */}
+            <Card
+              className="bg-white border-2 border-dashed border-gray-300 hover:border-gray-400 transition-colors cursor-pointer group focus-within:ring-2 focus-within:ring-blue-500"
+              tabIndex={0}
+              role="button"
+              aria-label="Create new board"
+              onClick={handleCreateBoard}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  handleCreateBoard();
+                }
+              }}
+            >
+              <CardContent className="p-6 flex flex-col items-center justify-center h-full min-h-[200px]">
+                <div className="h-12 w-12 bg-gray-100 rounded-lg flex items-center justify-center mb-4 group-hover:bg-gray-200 transition-colors">
+                  <Plus className="h-6 w-6 text-gray-400" />
+                </div>
+                <h3 className="font-medium text-gray-900 mb-1">
+                  Create New Board
+                </h3>
+                <p className="text-sm text-gray-500 text-center">
+                  Start a new whiteboard for your next project
+                </p>
+              </CardContent>
             </Card>
-          ))}
-
-          {/* Create New Board Card */}
-          <Card
-            className="bg-white border-2 border-dashed border-gray-300 hover:border-gray-400 transition-colors cursor-pointer group"
-            onClick={handleCreateBoard}
-          >
-            <CardContent className="p-6 flex flex-col items-center justify-center h-full min-h-[200px]">
-              <div className="h-12 w-12 bg-gray-100 rounded-lg flex items-center justify-center mb-4 group-hover:bg-gray-200 transition-colors">
-                <Plus className="h-6 w-6 text-gray-400" />
-              </div>
-              <h3 className="font-medium text-gray-900 mb-1">
-                Create New Board
-              </h3>
-              <p className="text-sm text-gray-500 text-center">
-                Start a new whiteboard for your next project
-              </p>
-            </CardContent>
-          </Card>
-        </div>
+          </div>
+        </section>
 
         {filteredBoards.length === 0 && searchTerm && (
           <div className="text-center py-12">
