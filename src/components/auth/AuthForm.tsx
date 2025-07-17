@@ -25,6 +25,7 @@ import { ErrorHandler, handleAsyncError } from "@/lib/errorHandler";
 import { loginSchema, signupSchema } from "@/lib/validation";
 import { validateAndToast } from "@/lib/validationUtils";
 import type { LoginFormData, SignupFormData } from "@/lib/validation";
+import { RetryButton } from "@/components/ui/retry-button";
 
 interface AuthFormProps {
   onAuthSuccess?: (user: { id: string; email: string; name: string }) => void;
@@ -36,6 +37,8 @@ const AuthForm = ({ onAuthSuccess }: AuthFormProps) => {
   const { toast } = useToast();
   const [showPassword, setShowPassword] = useState(false);
   const { signIn, signUp } = useAuth();
+  const [loginError, setLoginError] = useState<string | null>(null);
+  const [signupError, setSignupError] = useState<string | null>(null);
 
   const form = useForm<LoginFormData & { name?: string }>({
     defaultValues: {
@@ -47,6 +50,8 @@ const AuthForm = ({ onAuthSuccess }: AuthFormProps) => {
 
   const onSubmit = async (data: LoginFormData & { name?: string }) => {
     setIsLoading(true);
+    setLoginError(null);
+    setSignupError(null);
     
     try {
       if (isLogin) {
@@ -63,6 +68,7 @@ const AuthForm = ({ onAuthSuccess }: AuthFormProps) => {
         );
         if (error) {
           toast(ErrorHandler.getToastConfig(error));
+          setLoginError(error.message);
         } else {
           toast({
             title: "Welcome back!",
@@ -84,6 +90,7 @@ const AuthForm = ({ onAuthSuccess }: AuthFormProps) => {
         );
         if (error) {
           toast(ErrorHandler.getToastConfig(error));
+          setSignupError(error.message);
         } else {
           toast({
             title: "Account created!",
@@ -227,6 +234,25 @@ const AuthForm = ({ onAuthSuccess }: AuthFormProps) => {
           </div>
           {/* Toast area for screen readers */}
           <div aria-live="polite" className="sr-only"></div>
+          {/* Error overlays for async actions */}
+          {loginError && (
+            <div className="fixed top-4 right-4 z-50">
+              <RetryButton
+                error={loginError}
+                onRetry={() => onSubmit(form.getValues())}
+                isLoading={isLoading}
+              />
+            </div>
+          )}
+          {signupError && (
+            <div className="fixed top-4 right-4 z-50">
+              <RetryButton
+                error={signupError}
+                onRetry={() => onSubmit(form.getValues())}
+                isLoading={isLoading}
+              />
+            </div>
+          )}
         </CardContent>
       </Card>
     </div>

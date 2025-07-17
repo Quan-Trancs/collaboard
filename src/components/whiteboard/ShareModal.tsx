@@ -21,6 +21,7 @@ import { ErrorHandler } from "@/lib/errorHandler";
 import { useToast } from "@/components/ui/use-toast";
 import { inviteCollaboratorSchema } from "@/lib/validation";
 import { validateAndToast } from "@/lib/validationUtils";
+import { Spinner, RetryButton, LoadingOverlay } from "@/components/ui/loading";
 
 interface ShareModalProps {
   open?: boolean;
@@ -48,7 +49,13 @@ const ShareModal = ({
   const [copied, setCopied] = useState(false);
   const [collaborators, setCollaborators] = useState<Collaborator[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [inviteError, setInviteError] = useState<string | null>(null);
+  const [updatePermissionError, setUpdatePermissionError] = useState<string | null>(null);
+  const [removeError, setRemoveError] = useState<string | null>(null);
   const { toast } = useToast();
+  const [selectedCollaboratorId, setSelectedCollaboratorId] = useState<string | null>(null);
+  const [selectedPermission, setSelectedPermission] = useState<"view" | "edit" | null>(null);
 
   // Helper to map Supabase collaborator to Collaborator
   function mapSupabaseCollaborator(c: any): Collaborator {
@@ -68,10 +75,12 @@ const ShareModal = ({
         const board = await boardApi.getBoard(boardId);
         const collaboratorsArray = (board && Array.isArray((board as any).collaborators)) ? (board as any).collaborators : [];
         setCollaborators(collaboratorsArray.map(mapSupabaseCollaborator));
+        setError(null);
       } catch (error) {
         const appError = ErrorHandler.createError(error, "Fetching collaborators");
         ErrorHandler.logError(appError, "Fetching collaborators");
         toast(ErrorHandler.getToastConfig(appError));
+        setError(appError.message);
       } finally {
         setLoading(false);
       }
@@ -92,6 +101,7 @@ const ShareModal = ({
     e.preventDefault();
     if (email && boardId) {
       setLoading(true);
+      setInviteError(null);
       try {
         // Validate invite data
         const inviteData = {
@@ -121,6 +131,7 @@ const ShareModal = ({
         const appError = ErrorHandler.createError(error, "Inviting collaborator");
         ErrorHandler.logError(appError, "Inviting collaborator");
         toast(ErrorHandler.getToastConfig(appError));
+        setInviteError(appError.message);
       } finally {
         setLoading(false);
       }
@@ -133,6 +144,9 @@ const ShareModal = ({
   ) => {
     if (boardId) {
       setLoading(true);
+      setUpdatePermissionError(null);
+      setSelectedCollaboratorId(id);
+      setSelectedPermission(newPermission);
       try {
         await boardApi.updateCollaboratorPermission(boardId, id, newPermission);
         // Refetch collaborators
@@ -148,6 +162,7 @@ const ShareModal = ({
         const appError = ErrorHandler.createError(error, "Updating collaborator permission");
         ErrorHandler.logError(appError, "Updating collaborator permission");
         toast(ErrorHandler.getToastConfig(appError));
+        setUpdatePermissionError(appError.message);
       } finally {
         setLoading(false);
       }
@@ -157,6 +172,9 @@ const ShareModal = ({
   const removeCollaborator = async (id: string) => {
     if (boardId) {
       setLoading(true);
+      setRemoveError(null);
+      setSelectedCollaboratorId(id);
+      setSelectedPermission(null); // No permission to revert to
       try {
         await boardApi.removeCollaborator(boardId, id);
         // Refetch collaborators
@@ -172,11 +190,33 @@ const ShareModal = ({
         const appError = ErrorHandler.createError(error, "Removing collaborator");
         ErrorHandler.logError(appError, "Removing collaborator");
         toast(ErrorHandler.getToastConfig(appError));
+        setRemoveError(appError.message);
       } finally {
         setLoading(false);
       }
     }
   };
+
+  // Add error state UI
+  if (error && !loading) {
+    return (
+      <div className="flex items-center justify-center p-8">
+        <RetryButton
+          error={error}
+          onRetry={() => window.location.reload()}
+          isLoading={loading}
+        />
+      </div>
+    );
+  }
+  // Add loading state UI
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center p-8">
+        <Spinner size="lg" />
+      </div>
+    );
+  }
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -331,6 +371,35 @@ const ShareModal = ({
             Done
           </Button>
         </DialogFooter>
+        <LoadingOverlay isVisible={loading} message="Processing..." />
+        {/* Error overlays for async actions */}
+        {inviteError && (
+          <div className="fixed top-4 right-4 z-50">
+            <RetryButton
+              error={inviteError}
+              onRetry={() => handleInvite({ preventDefault: () => {} } as React.FormEvent)}
+              isLoading={loading}
+            />
+          </div>
+        )}
+        {updatePermissionError && selectedCollaboratorId && selectedPermission && (
+          <div className="fixed top-4 right-4 z-50">
+            <RetryButton
+              error={updatePermissionError}
+              onRetry={() => updateCollaboratorPermission(selectedCollaboratorId, selectedPermission)}
+              isLoading={loading}
+            />
+          </div>
+        )}
+        {removeError && selectedCollaboratorId && (
+          <div className="fixed top-4 right-4 z-50">
+            <RetryButton
+              error={removeError}
+              onRetry={() => removeCollaborator(selectedCollaboratorId)}
+              isLoading={loading}
+            />
+          </div>
+        )}
       </DialogContent>
     </Dialog>
   );

@@ -41,6 +41,7 @@ import {
   mapElementTypeToApi,
 } from "@/lib/validation";
 import { validateAndToast } from "@/lib/validationUtils";
+import { WhiteboardSkeleton, RetryButton, LoadingOverlay } from "@/components/ui/loading";
 
 interface WhiteboardProps {
   boardId?: string;
@@ -99,6 +100,7 @@ const Whiteboard = ({
   const [collaborators, setCollaborators] = useState<Collaborator[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [history, setHistory] = useState<DrawingElement[][]>([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
   const [showShareModal, setShowShareModal] = useState(false);
@@ -108,6 +110,11 @@ const Whiteboard = ({
   const [selectedElement, setSelectedElement] = useState<string | null>(null);
   const { toast } = useToast();
   const [showClearDialog, setShowClearDialog] = useState(false);
+  const [addError, setAddError] = useState<string | null>(null);
+  const [updateError, setUpdateError] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [clearError, setClearError] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   const colors = [
     "#000000",
@@ -293,10 +300,12 @@ const Whiteboard = ({
             toast(ErrorHandler.getToastConfig(appError));
           }
         });
+        setError(null);
       } catch (error) {
         const appError = ErrorHandler.createError(error, "Loading board data");
         ErrorHandler.logError(appError, "Loading board data");
         toast(ErrorHandler.getToastConfig(appError));
+        setError(appError.message);
       } finally {
         setLoading(false);
       }
@@ -392,6 +401,7 @@ const Whiteboard = ({
     if (textInput.trim()) {
       try {
         setSaving(true);
+        setAddError(null);
         const elementPayload = {
           board_id: boardId,
           type: mapElementTypeToApi("text"),
@@ -415,6 +425,7 @@ const Whiteboard = ({
         const appError = ErrorHandler.createError(error, "Adding text element");
         ErrorHandler.logError(appError, "Adding text element");
         toast(ErrorHandler.getToastConfig(appError));
+        setAddError(appError.message);
       } finally {
         setSaving(false);
       }
@@ -443,6 +454,7 @@ const Whiteboard = ({
   const clearCanvas = async () => {
     try {
       setSaving(true);
+      setClearError(null);
       // In a real implementation, you might want to delete all elements from the database
       // For now, well just clear the local state
       setElements([]);
@@ -456,6 +468,7 @@ const Whiteboard = ({
       const appError = ErrorHandler.createError(error, "Clearing canvas");
       ErrorHandler.logError(appError, "Clearing canvas");
       toast(ErrorHandler.getToastConfig(appError));
+      setClearError(appError.message);
     } finally {
       setSaving(false);
       setShowClearDialog(false);
@@ -466,6 +479,7 @@ const Whiteboard = ({
   const saveBoard = async () => {
     try {
       setSaving(true);
+      setSaveError(null);
       // In a real app, this would save to a backend
       console.log("Saving board:", { boardId, elements });
       
@@ -479,6 +493,7 @@ const Whiteboard = ({
       const appError = ErrorHandler.createError(error, "Saving board");
       ErrorHandler.logError(appError, "Saving board");
       toast(ErrorHandler.getToastConfig(appError));
+      setSaveError(appError.message);
     } finally {
       setSaving(false);
     }
@@ -709,6 +724,7 @@ const Whiteboard = ({
   const handleElementUpdate = async (elementId: string, updates: any) => {
     try {
       setSaving(true);
+      setUpdateError(null);
       const validated = validateAndToast(updateElementSchema, updates, "Element Update");
       if (!validated) {
         setSaving(false);
@@ -728,6 +744,7 @@ const Whiteboard = ({
       const appError = ErrorHandler.createError(error, "Updating element");
       ErrorHandler.logError(appError, "Updating element");
       toast(ErrorHandler.getToastConfig(appError));
+      setUpdateError(appError.message);
     } finally {
       setSaving(false);
     }
@@ -737,6 +754,7 @@ const Whiteboard = ({
   const handleElementDelete = async (elementId: string) => {
     try {
       setSaving(true);
+      setDeleteError(null);
       await elementApi.deleteElement(elementId);
       setElements(prev => prev.filter(element => element.id !== elementId));
       setSelectedElement(null);
@@ -750,10 +768,28 @@ const Whiteboard = ({
       const appError = ErrorHandler.createError(error, "Deleting element");
       ErrorHandler.logError(appError, "Deleting element");
       toast(ErrorHandler.getToastConfig(appError));
+      setDeleteError(appError.message);
     } finally {
       setSaving(false);
     }
   };
+
+  // Add error state UI
+  if (error && !loading) {
+    return (
+      <div className="h-screen flex items-center justify-center bg-gray-50">
+        <RetryButton
+          error={error}
+          onRetry={() => window.location.reload()}
+          isLoading={loading}
+        />
+      </div>
+    );
+  }
+  // Add loading state UI
+  if (loading) {
+    return <WhiteboardSkeleton />;
+  }
 
   return (
     <div className="h-screen flex bg-gray-50">
@@ -1240,6 +1276,54 @@ const Whiteboard = ({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      {/* Overlay spinner for blocking operations */}
+      <LoadingOverlay isVisible={saving} message="Saving..." />
+      {/* Error overlays for async actions */}
+      {addError && (
+        <div className="fixed top-4 right-4 z-50">
+          <RetryButton
+            error={addError}
+            onRetry={addText}
+            isLoading={saving}
+          />
+        </div>
+      )}
+      {updateError && (
+        <div className="fixed top-4 right-4 z-50">
+          <RetryButton
+            error={updateError}
+            onRetry={() => handleElementUpdate(selectedElement!, {})}
+            isLoading={saving}
+          />
+        </div>
+      )}
+      {deleteError && (
+        <div className="fixed top-4 right-4 z-50">
+          <RetryButton
+            error={deleteError}
+            onRetry={() => handleElementDelete(selectedElement!)}
+            isLoading={saving}
+          />
+        </div>
+      )}
+      {clearError && (
+        <div className="fixed top-4 right-4 z-50">
+          <RetryButton
+            error={clearError}
+            onRetry={clearCanvas}
+            isLoading={saving}
+          />
+        </div>
+      )}
+      {saveError && (
+        <div className="fixed top-4 right-4 z-50">
+          <RetryButton
+            error={saveError}
+            onRetry={saveBoard}
+            isLoading={saving}
+          />
+        </div>
+      )}
     </div>
   );
 };

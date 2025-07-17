@@ -15,6 +15,7 @@ import { useToast } from "@/components/ui/use-toast";
 import { boardApi } from "@/lib/api";
 import { Loader2 } from "lucide-react";
 import { ErrorHandler, handleAsyncError } from "@/lib/errorHandler";
+import { BoardCardSkeleton, RetryButton } from "@/components/ui/loading";
 
 interface Board {
   id: string;
@@ -44,6 +45,8 @@ const BoardsList = ({
   const [boards, setBoards] = useState<Board[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
   const { toast } = useToast();
 
   // Fetch boards from Supabase
@@ -90,13 +93,14 @@ const BoardsList = ({
 
   // Create board using Supabase
   const handleCreateBoard = async () => {
-    const { data, error: createError } = await handleAsyncError(
+    setCreating(true);
+    setCreateError(null);
+    const { data, error: createErrorObj } = await handleAsyncError(
       async () => {
         const newBoard = await boardApi.createBoard({
           title: "Untitled Board",
           description: "New whiteboard",
         });
-
         // Refetch boards after creation
         const supabaseBoards = await boardApi.getBoards();
         return (supabaseBoards || []).map((b: any) => ({
@@ -112,9 +116,9 @@ const BoardsList = ({
       },
       "BoardsList.createBoard"
     );
-
-    if (createError) {
-      toast(ErrorHandler.getToastConfig(createError));
+    if (createErrorObj) {
+      setCreateError(createErrorObj.message);
+      toast(ErrorHandler.getToastConfig(createErrorObj));
     } else if (data) {
       setBoards(data);
       toast({
@@ -123,6 +127,7 @@ const BoardsList = ({
       });
       onCreateBoard?.();
     }
+    setCreating(false);
   };
 
   const formatDate = (date: Date) => {
@@ -133,21 +138,40 @@ const BoardsList = ({
     });
   };
 
-  // Add error state UI
+  // Replace error state UI
   if (error && !loading) {
+    return (
+      <div className="min-h-screen bg-gray-50 p-6 flex items-center justify-center">
+        <RetryButton
+          error={error}
+          onRetry={() => window.location.reload()}
+          isLoading={loading}
+        />
+      </div>
+    );
+  }
+  // Replace loading state UI
+  if (loading) {
     return (
       <div className="min-h-screen bg-gray-50 p-6">
         <div className="max-w-7xl mx-auto">
-          <div className="text-center py-12">
-            <AlertTriangle className="h-12 w-12 text-red-500 mx-auto" />
+          <div className="mb-8">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h1 className="text-3xl font-bold text-gray-900">
+                  Welcome back!
+                </h1>
+                <p className="text-gray-600 mt-1">
+                  Loading your whiteboards...
+                </p>
+              </div>
+            </div>
           </div>
-          <h3 className="text-lg font-medium text-gray-900 mb-2">
-            Failed to load boards
-          </h3>
-          <p className="text-gray-500 mb-4">{error}</p>
-          <Button onClick={() => window.location.reload()}>
-            Try Again
-          </Button>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            {Array.from({ length: 6 }).map((_, i) => (
+              <BoardCardSkeleton key={i} />
+            ))}
+          </div>
         </div>
       </div>
     );
@@ -167,14 +191,24 @@ const BoardsList = ({
                 Manage your whiteboards and collaborate with your team
               </p>
             </div>
-            <Button
-              onClick={handleCreateBoard}
-              className="flex items-center gap-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-              aria-label="Create new board"
-            >
-              <Plus className="h-4 w-4" />
-              New Board
-            </Button>
+            {createError ? (
+              <RetryButton
+                error={createError}
+                onRetry={handleCreateBoard}
+                isLoading={creating}
+                className="w-full"
+              />
+            ) : (
+              <Button
+                onClick={handleCreateBoard}
+                className="flex items-center gap-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                aria-label="Create new board"
+                disabled={creating}
+              >
+                {creating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+                {creating ? "Creating..." : "New Board"}
+              </Button>
+            )}
           </div>
 
           {/* Search */}
