@@ -8,12 +8,13 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Plus, Search, Calendar, Users, MoreVertical, LogOut } from "lucide-react";
+import { Plus, Search, Calendar, Users, MoreVertical, LogOut, AlertTriangle } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { useToast } from "@/components/ui/use-toast";
 import { boardApi } from "@/lib/api";
 import { Loader2 } from "lucide-react";
+import { ErrorHandler, handleAsyncError } from "@/lib/errorHandler";
 
 interface Board {
   id: string;
@@ -42,35 +43,41 @@ const BoardsList = ({
   const [searchTerm, setSearchTerm] = useState("");
   const [boards, setBoards] = useState<Board[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const { toast } = useToast();
 
   // Fetch boards from Supabase
   useEffect(() => {
     const fetchBoards = async () => {
       setLoading(true);
-      try {
-        const supabaseBoards = await boardApi.getBoards();
-        // Map Supabase boards to local Board type
-        const mappedBoards: Board[] = (supabaseBoards || []).map((b: any) => ({
-          id: b.id,
-          title: b.title,
-          description: b.description,
-          createdAt: b.created_at ? new Date(b.created_at) : new Date(),
-          updatedAt: b.updated_at ? new Date(b.updated_at) : new Date(),
-          collaborators: b.collaborators ? b.collaborators.length : 1,
-          isShared: b.is_public || (b.collaborators && b.collaborators.length > 0),
-          thumbnail: b.thumbnail_url,
-        }));
-        setBoards(mappedBoards);
-      } catch (error: any) {
-        toast({
-          title: "Failed to load boards",
-          description: error.message || "Could not fetch boards from server.",
-          variant: "destructive",
-        });
-      } finally {
-        setLoading(false);
+      setError(null);
+
+      const { data, error: fetchError } = await handleAsyncError(
+        async () => {
+          const supabaseBoards = await boardApi.getBoards();
+          // Map Supabase boards to local Board type
+          return (supabaseBoards || []).map((b: any) => ({
+            id: b.id,
+            title: b.title,
+            description: b.description,
+            createdAt: b.created_at ? new Date(b.created_at) : new Date(),
+            updatedAt: b.updated_at ? new Date(b.updated_at) : new Date(),
+            collaborators: b.collaborators ? b.collaborators.length : 1,
+            isShared: b.is_public || (b.collaborators && b.collaborators.length > 0),
+            thumbnail: b.thumbnail_url,
+          }));
+        },
+        "BoardsList.fetchBoards"
+      );
+
+      if (fetchError) {
+        setError(fetchError.message);
+        toast(ErrorHandler.getToastConfig(fetchError));
+      } else if (data) {
+        setBoards(data);
       }
+
+      setLoading(false);
     };
     fetchBoards();
   }, []);
@@ -83,38 +90,38 @@ const BoardsList = ({
 
   // Create board using Supabase
   const handleCreateBoard = async () => {
-    try {
-      setLoading(true);
-      const newBoard = await boardApi.createBoard({
-        title: "Untitled Board",
-        description: "New whiteboard",
-      });
+    const { data, error: createError } = await handleAsyncError(
+      async () => {
+        const newBoard = await boardApi.createBoard({
+          title: "Untitled Board",
+          description: "New whiteboard",
+        });
+
+        // Refetch boards after creation
+        const supabaseBoards = await boardApi.getBoards();
+        return (supabaseBoards || []).map((b: any) => ({
+          id: b.id,
+          title: b.title,
+          description: b.description,
+          createdAt: b.created_at ? new Date(b.created_at) : new Date(),
+          updatedAt: b.updated_at ? new Date(b.updated_at) : new Date(),
+          collaborators: b.collaborators ? b.collaborators.length : 1,
+          isShared: b.is_public || (b.collaborators && b.collaborators.length > 0),
+          thumbnail: b.thumbnail_url,
+        }));
+      },
+      "BoardsList.createBoard"
+    );
+
+    if (createError) {
+      toast(ErrorHandler.getToastConfig(createError));
+    } else if (data) {
+      setBoards(data);
       toast({
         title: "Board created!",
-        description: `A new board has been added to your dashboard.`,
+        description: "A new board has been added to your dashboard.",
       });
-      // Refetch boards
-      const supabaseBoards = await boardApi.getBoards();
-      const mappedBoards: Board[] = (supabaseBoards || []).map((b: any) => ({
-        id: b.id,
-        title: b.title,
-        description: b.description,
-        createdAt: b.created_at ? new Date(b.created_at) : new Date(),
-        updatedAt: b.updated_at ? new Date(b.updated_at) : new Date(),
-        collaborators: b.collaborators ? b.collaborators.length : 1,
-        isShared: b.is_public || (b.collaborators && b.collaborators.length > 0),
-        thumbnail: b.thumbnail_url,
-      }));
-      setBoards(mappedBoards);
       onCreateBoard?.();
-    } catch (error: any) {
-      toast({
-        title: "Failed to create board",
-        description: error.message || "Could not create board.",
-        variant: "destructive",
-      });
-    } finally {
-      setLoading(false);
     }
   };
 
@@ -125,6 +132,26 @@ const BoardsList = ({
       year: "numeric",
     });
   };
+
+  // Add error state UI
+  if (error && !loading) {
+    return (
+      <div className="min-h-screen bg-gray-50 p-6">
+        <div className="max-w-7xl mx-auto">
+          <div className="text-center py-12">
+            <AlertTriangle className="h-12 w-12 text-red-500 mx-auto" />
+          </div>
+          <h3 className="text-lg font-medium text-gray-900 mb-2">
+            Failed to load boards
+          </h3>
+          <p className="text-gray-500 mb-4">{error}</p>
+          <Button onClick={() => window.location.reload()}>
+            Try Again
+          </Button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gray-50 p-6">

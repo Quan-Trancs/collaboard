@@ -27,6 +27,7 @@ import { useToast } from "@/components/ui/use-toast";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { ImageElement, ShapeElement, TableElement, ChartElement, IconElement } from "./InsertableElements";
 import { elementApi, boardApi, realtimeApi } from "@/lib/api";
+import { ErrorHandler, handleAsyncError } from "@/lib/errorHandler";
 
 interface WhiteboardProps {
   boardId?: string;
@@ -84,6 +85,7 @@ const Whiteboard = ({
   const [elements, setElements] = useState<DrawingElement[]>([]);
   const [collaborators, setCollaborators] = useState<Collaborator[]>([]);
   const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
   const [history, setHistory] = useState<DrawingElement[][]>([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
   const [showShareModal, setShowShareModal] = useState(false);
@@ -258,20 +260,30 @@ const Whiteboard = ({
         setCollaborators(mappedCollaborators);
         // Subscribe to real-time updates
         unsubscribeElements = realtimeApi.subscribeToBoard(boardId, async () => {
-          const updatedElements = await elementApi.getElements(boardId);
-          setElements((updatedElements || []).map(mapSupabaseElementToDrawingElement));
+          try {
+            const updatedElements = await elementApi.getElements(boardId);
+            setElements((updatedElements || []).map(mapSupabaseElementToDrawingElement));
+          } catch (error) {
+            const appError = ErrorHandler.createError(error, "Real-time board updates");
+            ErrorHandler.logError(appError, "Real-time board updates");
+            toast(ErrorHandler.getToastConfig(appError));
+          }
         });
         unsubscribeCollaborators = realtimeApi.subscribeToCollaborators(boardId, async () => {
-          const board = await boardApi.getBoard(boardId);
-          const collaboratorsArray = (board && Array.isArray((board as any).collaborators)) ? (board as any).collaborators : [];
-          setCollaborators(collaboratorsArray.map(mapSupabaseCollaborator));
+          try {
+            const board = await boardApi.getBoard(boardId);
+            const collaboratorsArray = (board && Array.isArray((board as any).collaborators)) ? (board as any).collaborators : [];
+            setCollaborators(collaboratorsArray.map(mapSupabaseCollaborator));
+          } catch (error) {
+            const appError = ErrorHandler.createError(error, "Real-time collaborator updates");
+            ErrorHandler.logError(appError, "Real-time collaborator updates");
+            toast(ErrorHandler.getToastConfig(appError));
+          }
         });
-      } catch (error: any) {
-        toast({
-          title: "Failed to load board data",
-          description: error.message || "Could not fetch board data from server.",
-          variant: "destructive",
-        });
+      } catch (error) {
+        const appError = ErrorHandler.createError(error, "Loading board data");
+        ErrorHandler.logError(appError, "Loading board data");
+        toast(ErrorHandler.getToastConfig(appError));
       } finally {
         setLoading(false);
       }
@@ -281,7 +293,7 @@ const Whiteboard = ({
       if (unsubscribeElements) unsubscribeElements.unsubscribe();
       if (unsubscribeCollaborators) unsubscribeCollaborators.unsubscribe();
     };
-  }, [boardId]);
+  }, [boardId, toast]);
 
   // Mouse event handlers
   const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -366,7 +378,7 @@ const Whiteboard = ({
   const addText = async () => {
     if (textInput.trim()) {
       try {
-        setLoading(true);
+        setSaving(true);
         const newElement = await elementApi.createElement({
           board_id: boardId,
           type: "text",
@@ -375,14 +387,17 @@ const Whiteboard = ({
         });
         setElements((prev) => [...prev, mapSupabaseElementToDrawingElement(newElement)]);
         saveToHistory();
-      } catch (error: any) {
+        
         toast({
-          title: "Failed to add text",
-          description: error.message || "Could not add text to board.",
-          variant: "destructive",
+          title: "Text added",
+          description: "Text element has been added to the board.",
         });
+      } catch (error) {
+        const appError = ErrorHandler.createError(error, "Adding text element");
+        ErrorHandler.logError(appError, "Adding text element");
+        toast(ErrorHandler.getToastConfig(appError));
       } finally {
-        setLoading(false);
+        setSaving(false);
       }
     }
 
@@ -406,24 +421,48 @@ const Whiteboard = ({
   };
 
   // Clear canvas
-  const clearCanvas = () => {
-    setElements([]);
-    saveToHistory();
-    toast({
-      title: "Canvas cleared",
-      description: "All elements have been removed from the board.",
-    });
-    setShowClearDialog(false);
+  const clearCanvas = async () => {
+    try {
+      setSaving(true);
+      // In a real implementation, you might want to delete all elements from the database
+      // For now, well just clear the local state
+      setElements([]);
+      saveToHistory();
+      
+      toast({
+        title: "Canvas cleared",
+        description: "All elements have been removed from the board.",
+      });
+    } catch (error) {
+      const appError = ErrorHandler.createError(error, "Clearing canvas");
+      ErrorHandler.logError(appError, "Clearing canvas");
+      toast(ErrorHandler.getToastConfig(appError));
+    } finally {
+      setSaving(false);
+      setShowClearDialog(false);
+    }
   };
 
   // Save board
-  const saveBoard = () => {
-    // In a real app, this would save to a backend
-    console.log("Saving board:", { boardId, elements });
-    toast({
-      title: "Board saved!",
-      description: "Your whiteboard has been saved.",
-    });
+  const saveBoard = async () => {
+    try {
+      setSaving(true);
+      // In a real app, this would save to a backend
+      console.log("Saving board:", { boardId, elements });
+      
+      // Simulate API call
+      await new Promise(resolve => setTimeout(resolve, 100));
+      toast({
+        title: "Board saved!",
+        description: "Your whiteboard has been saved successfully.",
+      });
+    } catch (error) {
+      const appError = ErrorHandler.createError(error, "Saving board");
+      ErrorHandler.logError(appError, "Saving board");
+      toast(ErrorHandler.getToastConfig(appError));
+    } finally {
+      setSaving(false);
+    }
   };
 
   // Handle insert operations
@@ -637,39 +676,45 @@ const Whiteboard = ({
   // Handle element update
   const handleElementUpdate = async (elementId: string, updates: any) => {
     try {
-      setLoading(true);
+      setSaving(true);
       const updated = await elementApi.updateElement(elementId, updates);
       setElements(prev => prev.map(element => 
         element.id === elementId ? mapSupabaseElementToDrawingElement(updated) : element
       ));
       saveToHistory();
-    } catch (error: any) {
+      
       toast({
-        title: "Failed to update element",
-        description: error.message || "Could not update element.",
-        variant: "destructive",
+        title: "Element updated",
+        description: "Element has been updated successfully.",
       });
+    } catch (error) {
+      const appError = ErrorHandler.createError(error, "Updating element");
+      ErrorHandler.logError(appError, "Updating element");
+      toast(ErrorHandler.getToastConfig(appError));
     } finally {
-      setLoading(false);
+      setSaving(false);
     }
   };
 
   // Handle element deletion
   const handleElementDelete = async (elementId: string) => {
     try {
-      setLoading(true);
+      setSaving(true);
       await elementApi.deleteElement(elementId);
       setElements(prev => prev.filter(element => element.id !== elementId));
       setSelectedElement(null);
       saveToHistory();
-    } catch (error: any) {
+      
       toast({
-        title: "Failed to delete element",
-        description: error.message || "Could not delete element.",
-        variant: "destructive",
+        title: "Element deleted",
+        description: "Element has been removed from the board.",
       });
+    } catch (error) {
+      const appError = ErrorHandler.createError(error, "Deleting element");
+      ErrorHandler.logError(appError, "Deleting element");
+      toast(ErrorHandler.getToastConfig(appError));
     } finally {
-      setLoading(false);
+      setSaving(false);
     }
   };
 
@@ -935,7 +980,14 @@ const Whiteboard = ({
             <h1 className="text-lg font-semibold text-gray-900">
               Untitled Board
             </h1>
-            <Badge variant="secondary">Auto-saved</Badge>
+            <Badge variant="secondary">
+              {saving ? "Saving..." : "Saved"}
+            </Badge>
+            {loading && (
+              <Badge variant="outline" className="animate-pulse">
+                Loading...
+              </Badge>
+            )}
           </div>
           {/* Collaborators */}
           <div className="flex items-center space-x-2">

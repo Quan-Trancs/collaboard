@@ -21,6 +21,7 @@ import { useToast } from "@/components/ui/use-toast";
 import { Eye, EyeOff } from "lucide-react";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useAuth } from "@/contexts/AuthContext";
+import { ErrorHandler, handleAsyncError } from "@/lib/errorHandler";
 
 interface AuthFormProps {
   onAuthSuccess?: (user: { id: string; email: string; name: string }) => void;
@@ -49,33 +50,34 @@ const AuthForm = ({ onAuthSuccess }: AuthFormProps) => {
 
   const onSubmit = async (data: FormData) => {
     setIsLoading(true);
-
-    try {
-      if (isLogin) {
-        await signIn(data.email, data.password);
+    if (isLogin) {
+      const { error } = await handleAsyncError(
+        () => signIn(data.email, data.password),
+        "AuthForm.signIn"
+      );
+      if (error) {
+        toast(ErrorHandler.getToastConfig(error));
+      } else {
         toast({
           title: "Welcome back!",
           description: `Successfully logged in as ${data.email}`,
         });
+      }
+    } else {
+      const { error } = await handleAsyncError(
+        () => signUp(data.email, data.password, data.name || data.email.split("@")[0]),
+        "AuthForm.signUp"
+      );
+      if (error) {
+        toast(ErrorHandler.getToastConfig(error));
       } else {
-        await signUp(data.email, data.password, data.name || data.email.split("@")[0]);
         toast({
           title: "Account created!",
           description: "Please check your email to verify your account.",
         });
       }
-
-      // The AuthContext will handle the user state, so we don't need to call onAuthSuccess here
-      // The parent component should listen to the auth state instead
-    } catch (error: any) {
-      toast({
-        title: "Authentication failed",
-        description: error.message || "Please check your credentials and try again.",
-        variant: "destructive",
-      });
-    } finally {
-      setIsLoading(false);
     }
+    setIsLoading(false);
   };
 
   return (
