@@ -17,6 +17,10 @@ import { Copy, Mail, Check } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { useEffect } from "react";
 import { boardApi } from "@/lib/api";
+import { ErrorHandler } from "@/lib/errorHandler";
+import { useToast } from "@/components/ui/use-toast";
+import { inviteCollaboratorSchema } from "@/lib/validation";
+import { validateAndToast } from "@/lib/validationUtils";
 
 interface ShareModalProps {
   open?: boolean;
@@ -44,6 +48,7 @@ const ShareModal = ({
   const [copied, setCopied] = useState(false);
   const [collaborators, setCollaborators] = useState<Collaborator[]>([]);
   const [loading, setLoading] = useState(true);
+  const { toast } = useToast();
 
   // Helper to map Supabase collaborator to Collaborator
   function mapSupabaseCollaborator(c: any): Collaborator {
@@ -64,13 +69,15 @@ const ShareModal = ({
         const collaboratorsArray = (board && Array.isArray((board as any).collaborators)) ? (board as any).collaborators : [];
         setCollaborators(collaboratorsArray.map(mapSupabaseCollaborator));
       } catch (error) {
-        // Optionally show error toast
+        const appError = ErrorHandler.createError(error, "Fetching collaborators");
+        ErrorHandler.logError(appError, "Fetching collaborators");
+        toast(ErrorHandler.getToastConfig(appError));
       } finally {
         setLoading(false);
       }
     };
     if (boardId) fetchCollaborators();
-  }, [boardId]);
+  }, [boardId, toast]);
 
   const shareLink = `https://example.com/board/${boardId}?access=${permission}`;
 
@@ -86,14 +93,34 @@ const ShareModal = ({
     if (email && boardId) {
       setLoading(true);
       try {
-        await boardApi.addCollaborator(boardId, email, permission);
+        // Validate invite data
+        const inviteData = {
+          boardId,
+          email,
+          permission,
+        };
+        const validated = validateAndToast(inviteCollaboratorSchema, inviteData, "Invite");
+        if (!validated) {
+          setLoading(false);
+          return;
+        }
+
+        await boardApi.addCollaborator(validated.boardId, validated.email, validated.permission);
+        
         // Refetch collaborators
         const board = await boardApi.getBoard(boardId);
         const collaboratorsArray = (board && Array.isArray((board as any).collaborators)) ? (board as any).collaborators : [];
         setCollaborators(collaboratorsArray.map(mapSupabaseCollaborator));
         setEmail("");
-      } catch (error: any) {
-        // Optionally show error toast
+        
+        toast({
+          title: "Invitation sent",
+          description: `Invitation sent to ${validated.email}`,
+        });
+      } catch (error) {
+        const appError = ErrorHandler.createError(error, "Inviting collaborator");
+        ErrorHandler.logError(appError, "Inviting collaborator");
+        toast(ErrorHandler.getToastConfig(appError));
       } finally {
         setLoading(false);
       }
@@ -112,8 +139,15 @@ const ShareModal = ({
         const board = await boardApi.getBoard(boardId);
         const collaboratorsArray = (board && Array.isArray((board as any).collaborators)) ? (board as any).collaborators : [];
         setCollaborators(collaboratorsArray.map(mapSupabaseCollaborator));
-      } catch (error: any) {
-        // Optionally show error toast
+        
+        toast({
+          title: "Permission updated",
+          description: `Permission updated to ${newPermission}`,
+        });
+      } catch (error) {
+        const appError = ErrorHandler.createError(error, "Updating collaborator permission");
+        ErrorHandler.logError(appError, "Updating collaborator permission");
+        toast(ErrorHandler.getToastConfig(appError));
       } finally {
         setLoading(false);
       }
@@ -129,8 +163,15 @@ const ShareModal = ({
         const board = await boardApi.getBoard(boardId);
         const collaboratorsArray = (board && Array.isArray((board as any).collaborators)) ? (board as any).collaborators : [];
         setCollaborators(collaboratorsArray.map(mapSupabaseCollaborator));
-      } catch (error: any) {
-        // Optionally show error toast
+        
+        toast({
+          title: "Collaborator removed",
+          description: "Collaborator has been removed from the board",
+        });
+      } catch (error) {
+        const appError = ErrorHandler.createError(error, "Removing collaborator");
+        ErrorHandler.logError(appError, "Removing collaborator");
+        toast(ErrorHandler.getToastConfig(appError));
       } finally {
         setLoading(false);
       }

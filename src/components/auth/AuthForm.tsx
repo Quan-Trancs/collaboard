@@ -22,15 +22,12 @@ import { Eye, EyeOff } from "lucide-react";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useAuth } from "@/contexts/AuthContext";
 import { ErrorHandler, handleAsyncError } from "@/lib/errorHandler";
+import { loginSchema, signupSchema } from "@/lib/validation";
+import { validateAndToast } from "@/lib/validationUtils";
+import type { LoginFormData, SignupFormData } from "@/lib/validation";
 
 interface AuthFormProps {
   onAuthSuccess?: (user: { id: string; email: string; name: string }) => void;
-}
-
-interface FormData {
-  email: string;
-  password: string;
-  name?: string;
 }
 
 const AuthForm = ({ onAuthSuccess }: AuthFormProps) => {
@@ -40,7 +37,7 @@ const AuthForm = ({ onAuthSuccess }: AuthFormProps) => {
   const [showPassword, setShowPassword] = useState(false);
   const { signIn, signUp } = useAuth();
 
-  const form = useForm<FormData>({
+  const form = useForm<LoginFormData & { name?: string }>({
     defaultValues: {
       email: "",
       password: "",
@@ -48,36 +45,59 @@ const AuthForm = ({ onAuthSuccess }: AuthFormProps) => {
     },
   });
 
-  const onSubmit = async (data: FormData) => {
+  const onSubmit = async (data: LoginFormData & { name?: string }) => {
     setIsLoading(true);
-    if (isLogin) {
-      const { error } = await handleAsyncError(
-        () => signIn(data.email, data.password),
-        "AuthForm.signIn"
-      );
-      if (error) {
-        toast(ErrorHandler.getToastConfig(error));
+    
+    try {
+      if (isLogin) {
+        // Validate login data
+        const validatedData = validateAndToast(loginSchema, data, "Login");
+        if (!validatedData) {
+          setIsLoading(false);
+          return;
+        }
+
+        const { error } = await handleAsyncError(
+          () => signIn(validatedData.email, validatedData.password),
+          "AuthForm.signIn"
+        );
+        if (error) {
+          toast(ErrorHandler.getToastConfig(error));
+        } else {
+          toast({
+            title: "Welcome back!",
+            description: `Successfully logged in as ${validatedData.email}`,
+          });
+        }
       } else {
-        toast({
-          title: "Welcome back!",
-          description: `Successfully logged in as ${data.email}`,
-        });
+        // Validate signup data
+        const signupData = { ...data, name: data.name || data.email.split("@")[0] };
+        const validatedData = validateAndToast(signupSchema, signupData, "Signup");
+        if (!validatedData) {
+          setIsLoading(false);
+          return;
+        }
+
+        const { error } = await handleAsyncError(
+          () => signUp(validatedData.email, validatedData.password, validatedData.name),
+          "AuthForm.signUp"
+        );
+        if (error) {
+          toast(ErrorHandler.getToastConfig(error));
+        } else {
+          toast({
+            title: "Account created!",
+            description: "Please check your email to verify your account.",
+          });
+        }
       }
-    } else {
-      const { error } = await handleAsyncError(
-        () => signUp(data.email, data.password, data.name || data.email.split("@")[0]),
-        "AuthForm.signUp"
-      );
-      if (error) {
-        toast(ErrorHandler.getToastConfig(error));
-      } else {
-        toast({
-          title: "Account created!",
-          description: "Please check your email to verify your account.",
-        });
-      }
+    } catch (error) {
+      const appError = ErrorHandler.createError(error, "Authentication");
+      ErrorHandler.logError(appError, "Authentication");
+      toast(ErrorHandler.getToastConfig(appError));
+    } finally {
+      setIsLoading(false);
     }
-    setIsLoading(false);
   };
 
   return (

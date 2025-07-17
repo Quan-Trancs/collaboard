@@ -28,6 +28,19 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { ImageElement, ShapeElement, TableElement, ChartElement, IconElement } from "./InsertableElements";
 import { elementApi, boardApi, realtimeApi } from "@/lib/api";
 import { ErrorHandler, handleAsyncError } from "@/lib/errorHandler";
+import {
+  createElementSchema,
+  createElementApiSchema,
+  updateElementSchema,
+  insertImageSchema,
+  insertShapeSchema,
+  insertTableSchema,
+  insertChartSchema,
+  insertIconSchema,
+  insertTemplateSchema,
+  mapElementTypeToApi,
+} from "@/lib/validation";
+import { validateAndToast } from "@/lib/validationUtils";
 
 interface WhiteboardProps {
   boardId?: string;
@@ -379,12 +392,18 @@ const Whiteboard = ({
     if (textInput.trim()) {
       try {
         setSaving(true);
-        const newElement = await elementApi.createElement({
+        const elementPayload = {
           board_id: boardId,
-          type: "text",
+          type: mapElementTypeToApi("text"),
           data: { text: textInput, color: currentColor, strokeWidth },
           position: { x: textPosition.x, y: textPosition.y },
-        });
+        };
+        const validated = validateAndToast(createElementApiSchema, elementPayload, "Element");
+        if (!validated) {
+          setSaving(false);
+          return;
+        }
+        const newElement = await elementApi.createElement(validated);
         setElements((prev) => [...prev, mapSupabaseElementToDrawingElement(newElement)]);
         saveToHistory();
         
@@ -475,9 +494,12 @@ const Whiteboard = ({
     const centerY = rect.height / 2;
 
     let newElement: DrawingElement;
+    let validated: any;
 
     switch (type) {
       case "image":
+        validated = validateAndToast(insertImageSchema, data, "Image");
+        if (!validated) return;
         newElement = {
           id: Date.now().toString(),
           type: "image",
@@ -485,8 +507,8 @@ const Whiteboard = ({
           y: centerY - 75,
           width: 200,
           height: 150,
-          src: data.src,
-          alt: data.name,
+          src: validated.src,
+          alt: validated.name,
           color: currentColor,
           strokeWidth: 1,
           opacity: 1,
@@ -495,6 +517,8 @@ const Whiteboard = ({
         break;
 
       case "shape":
+        validated = validateAndToast(insertShapeSchema, data, "Shape");
+        if (!validated) return;
         newElement = {
           id: Date.now().toString(),
           type: "shape",
@@ -502,7 +526,7 @@ const Whiteboard = ({
           y: centerY - 50,
           width: 100,
           height: 100,
-          shapeType: data.type,
+          shapeType: validated.type,
           color: currentColor,
           strokeWidth: 2,
           fillColor: "transparent",
@@ -510,6 +534,8 @@ const Whiteboard = ({
         break;
 
       case "table":
+        validated = validateAndToast(insertTableSchema, data, "Table");
+        if (!validated) return;
         newElement = {
           id: Date.now().toString(),
           type: "table",
@@ -517,15 +543,17 @@ const Whiteboard = ({
           y: centerY - 100,
           width: 300,
           height: 200,
-          rows: data.rows,
-          cols: data.cols,
-          data: Array(data.rows).fill(Array(data.cols).fill("")),
+          rows: validated.rows,
+          cols: validated.cols,
+          data: Array(validated.rows).fill(Array(validated.cols).fill("")),
           color: currentColor,
           strokeWidth: 1,
         };
         break;
 
       case "chart":
+        validated = validateAndToast(insertChartSchema, data, "Chart");
+        if (!validated) return;
         const chartData = [10, 20, 15, 25, 30];
         const chartColors = ["#3B82F6", "#10B981", "#F59E0B", "#EF4444", "#8B5CF6"];
         newElement = {
@@ -535,7 +563,7 @@ const Whiteboard = ({
           y: centerY - 75,
           width: 200,
           height: 150,
-          chartType: data.type, // Keep chartType for chart-specific data
+          chartType: validated.type, // Keep chartType for chart-specific data
           data: chartData,
           colors: chartColors,
           color: currentColor,
@@ -544,6 +572,8 @@ const Whiteboard = ({
         break;
 
       case "icon":
+        validated = validateAndToast(insertIconSchema, data, "Icon");
+        if (!validated) return;
         newElement = {
           id: Date.now().toString(),
           type: "icon",
@@ -551,7 +581,7 @@ const Whiteboard = ({
           y: centerY - 25,
           width: 50,
           height: 50,
-          symbol: data.symbol,
+          symbol: validated.symbol,
           color: currentColor,
           strokeWidth: 1,
         };
@@ -559,7 +589,9 @@ const Whiteboard = ({
 
       case "template":
         // Handle template insertion
-        const templateElements = getTemplateElements(data.type, centerX, centerY);
+        validated = validateAndToast(insertTemplateSchema, data, "Template");
+        if (!validated) return;
+        const templateElements = getTemplateElements(validated.type, centerX, centerY);
         setElements(prev => [...prev, ...templateElements]);
         saveToHistory();
         return;
@@ -677,7 +709,12 @@ const Whiteboard = ({
   const handleElementUpdate = async (elementId: string, updates: any) => {
     try {
       setSaving(true);
-      const updated = await elementApi.updateElement(elementId, updates);
+      const validated = validateAndToast(updateElementSchema, updates, "Element Update");
+      if (!validated) {
+        setSaving(false);
+        return;
+      }
+      const updated = await elementApi.updateElement(elementId, validated);
       setElements(prev => prev.map(element => 
         element.id === elementId ? mapSupabaseElementToDrawingElement(updated) : element
       ));
