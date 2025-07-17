@@ -15,13 +15,17 @@ import {
   LogOut,
   Palette,
   Minus,
+  Plus,
+  Move,
 } from "lucide-react";
 import ShareModal from "./ShareModal";
+import InsertPanel from "./InsertPanel";
 import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { useToast } from "@/components/ui/use-toast";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { ImageElement, ShapeElement, TableElement, ChartElement, IconElement } from "./InsertableElements";
 
 interface WhiteboardProps {
   boardId?: string;
@@ -30,11 +34,11 @@ interface WhiteboardProps {
   onLogout?: () => void;
 }
 
-type Tool = "pen" | "rectangle" | "circle" | "text" | "eraser";
+type Tool = "pen" | "rectangle" | "circle" | "text" | "eraser" | "select";
 
 interface DrawingElement {
   id: string;
-  type: Tool;
+  type: Tool | "image" | "shape" | "table" | "chart" | "icon" | "template";
   x: number;
   y: number;
   width?: number;
@@ -43,6 +47,19 @@ interface DrawingElement {
   text?: string;
   color: string;
   strokeWidth: number;
+  // Additional properties for insertable elements
+  src?: string; // for images
+  alt?: string; // for images
+  opacity?: number; // for images
+  borderRadius?: number; // for images
+  shapeType?: string; // for shapes
+  fillColor?: string; // for shapes
+  data?: any; // for tables and charts
+  symbol?: string; // for icons
+  rows?: number; // for tables
+  cols?: number; // for tables
+  chartType?: string; // for charts
+  colors?: string[]; // for charts
 }
 
 interface Collaborator {
@@ -70,6 +87,7 @@ const Whiteboard = ({
   const [isTextMode, setIsTextMode] = useState(false);
   const [textInput, setTextInput] = useState("");
   const [textPosition, setTextPosition] = useState({ x: 0, y: 0 });
+  const [selectedElement, setSelectedElement] = useState<string | null>(null);
   const [collaborators] = useState<Collaborator[]>([
     {
       id: "2",
@@ -132,8 +150,12 @@ const Whiteboard = ({
     // Clear canvas
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    // Draw all elements
-    elements.forEach((element) => {
+    // Draw only drawing elements (pen, rectangle, circle, text)
+    const drawingElements = elements.filter(element => 
+      ["pen", "rectangle", "circle", "text"].includes(element.type)
+    );
+
+    drawingElements.forEach((element) => {
       ctx.strokeStyle = element.color;
       ctx.lineWidth = element.strokeWidth;
       ctx.lineCap = "round";
@@ -194,7 +216,7 @@ const Whiteboard = ({
 
   // Mouse event handlers
   const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (isTextMode) return;
+    if (isTextMode || currentTool === "select") return;
 
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -221,7 +243,7 @@ const Whiteboard = ({
   };
 
   const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (!isDrawing || isTextMode) return;
+    if (!isDrawing || isTextMode || currentTool === "select") return;
 
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -246,13 +268,13 @@ const Whiteboard = ({
   };
 
   const handleMouseUp = () => {
-    if (isDrawing) {
+    if (isDrawing && currentTool !== "select") {
       setIsDrawing(false);
       saveToHistory();
     }
   };
 
-  // Canvas click for text tool
+  // Canvas click for text tool and selection
   const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
     if (currentTool === "text" && !isTextMode) {
       const canvas = canvasRef.current;
@@ -265,6 +287,9 @@ const Whiteboard = ({
       setTextPosition({ x, y });
       setIsTextMode(true);
       setTextInput("");
+    } else if (currentTool === "select") {
+      // Deselect when clicking on empty canvas
+      setSelectedElement(null);
     }
   };
 
@@ -325,6 +350,229 @@ const Whiteboard = ({
     });
   };
 
+  // Handle insert operations
+  const handleInsert = (type: string, data: any) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const rect = canvas.getBoundingClientRect();
+    const centerX = rect.width / 2;
+    const centerY = rect.height / 2;
+
+    let newElement: DrawingElement;
+
+    switch (type) {
+      case "image":
+        newElement = {
+          id: Date.now().toString(),
+          type: "image",
+          x: centerX - 100,
+          y: centerY - 75,
+          width: 200,
+          height: 150,
+          src: data.src,
+          alt: data.name,
+          color: currentColor,
+          strokeWidth: 1,
+          opacity: 1,
+          borderRadius: 0,
+        };
+        break;
+
+      case "shape":
+        newElement = {
+          id: Date.now().toString(),
+          type: "shape",
+          x: centerX - 50,
+          y: centerY - 50,
+          width: 100,
+          height: 100,
+          shapeType: data.type,
+          color: currentColor,
+          strokeWidth: 2,
+          fillColor: "transparent",
+        };
+        break;
+
+      case "table":
+        newElement = {
+          id: Date.now().toString(),
+          type: "table",
+          x: centerX - 150,
+          y: centerY - 100,
+          width: 300,
+          height: 200,
+          rows: data.rows,
+          cols: data.cols,
+          data: Array(data.rows).fill(Array(data.cols).fill("")),
+          color: currentColor,
+          strokeWidth: 1,
+        };
+        break;
+
+      case "chart":
+        const chartData = [10, 20, 15, 25, 30];
+        const chartColors = ["#3B82F6", "#10B981", "#F59E0B", "#EF4444", "#8B5CF6"];
+        newElement = {
+          id: Date.now().toString(),
+          type: "chart",
+          x: centerX - 100,
+          y: centerY - 75,
+          width: 200,
+          height: 150,
+          chartType: data.type, // Keep chartType for chart-specific data
+          data: chartData,
+          colors: chartColors,
+          color: currentColor,
+          strokeWidth: 1,
+        };
+        break;
+
+      case "icon":
+        newElement = {
+          id: Date.now().toString(),
+          type: "icon",
+          x: centerX - 25,
+          y: centerY - 25,
+          width: 50,
+          height: 50,
+          symbol: data.symbol,
+          color: currentColor,
+          strokeWidth: 1,
+        };
+        break;
+
+      case "template":
+        // Handle template insertion
+        const templateElements = getTemplateElements(data.type, centerX, centerY);
+        setElements(prev => [...prev, ...templateElements]);
+        saveToHistory();
+        return;
+
+      default:
+        return;
+    }
+
+    setElements(prev => [...prev, newElement]);
+    saveToHistory();
+  };
+
+  // Get template elements
+  const getTemplateElements = (templateType: string, centerX: number, centerY: number) => {
+    const elements: DrawingElement[] = [];
+    
+    switch (templateType) {
+      case "titleSlide":
+        elements.push(
+          {
+            id: Date.now().toString() + "-title",
+            type: "text",
+            x: centerX - 100,
+            y: centerY - 50,
+            text: "Title",
+            color: "#000000",
+            strokeWidth: 3,
+          },
+          {
+            id: Date.now().toString() + "-subtitle",
+            type: "text",
+            x: centerX - 80,
+            y: centerY + 20,
+            text: "Subtitle",
+            color: "#666666",
+            strokeWidth: 2,
+          }
+        );
+        break;
+
+      case "contentSlide":
+        elements.push(
+          {
+            id: Date.now().toString() + "-title",
+            type: "text",
+            x: centerX - 100,
+            y: centerY - 80,
+            text: "Content Title",
+            color: "#000000",
+            strokeWidth: 3,
+          },
+          {
+            id: Date.now().toString() + "-bullet1",
+            type: "text",
+            x: centerX - 80,
+            y: centerY - 20,
+            text: "• Point 1",
+            color: "#333333",
+            strokeWidth: 2,
+          },
+          {
+            id: Date.now().toString() + "-bullet2",
+            type: "text",
+            x: centerX - 80,
+            y: centerY + 10,
+            text: "• Point 2",
+            color: "#333333",
+            strokeWidth: 2,
+          }
+        );
+        break;
+
+      case "twoColumn":
+        elements.push(
+          {
+            id: Date.now().toString() + "-title",
+            type: "text",
+            x: centerX - 100,
+            y: centerY - 80,
+            text: "Two Column Layout",
+            color: "#000000",
+            strokeWidth: 3,
+          },
+          {
+            id: Date.now().toString() + "-col1",
+            type: "text",
+            x: centerX - 120,
+            y: centerY - 20,
+            text: "Left Column",
+            color: "#333333",
+            strokeWidth: 2,
+          },
+          {
+            id: Date.now().toString() + "-col2",
+            type: "text",
+            x: centerX + 20,
+            y: centerY - 20,
+            text: "Right Column",
+            color: "#333333",
+            strokeWidth: 2,
+          }
+        );
+        break;
+    }
+    
+    return elements;
+  };
+
+  // Handle element selection
+  const handleElementSelect = (elementId: string) => {
+    setSelectedElement(elementId);
+  };
+
+  // Handle element update
+  const handleElementUpdate = (elementId: string, updates: any) => {
+    setElements(prev => prev.map(element => 
+      element.id === elementId ? { ...element, ...updates } : element
+    ));
+    saveToHistory();
+  };
+
+  // Handle element deletion
+  const handleElementDelete = (elementId: string) => {
+    setElements(prev => prev.filter(element => element.id !== elementId));
+    setSelectedElement(null);
+    saveToHistory();
+  };
+
   return (
     <div className="h-screen flex bg-gray-50">
       {/* Sidebar Toolbar */}
@@ -347,6 +595,21 @@ const Whiteboard = ({
         </Tooltip>
         <Separator className="w-8" />
         {/* Drawing Tools */}
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant={currentTool === "select" ? "default" : "ghost"}
+              size="icon"
+              onClick={() => setCurrentTool("select")}
+              aria-label="Select tool"
+              tabIndex={0}
+              className="focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              <Move className="h-5 w-5" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Select</TooltipContent>
+        </Tooltip>
         <Tooltip>
           <TooltipTrigger asChild>
             <Button
@@ -422,6 +685,9 @@ const Whiteboard = ({
           </TooltipTrigger>
           <TooltipContent>Eraser</TooltipContent>
         </Tooltip>
+        <Separator className="w-8" />
+        {/* Insert Panel */}
+        <InsertPanel onInsert={handleInsert} />
         <Separator className="w-8" />
         {/* Colors */}
         <div className="flex flex-col space-y-1" aria-label="Color picker">
@@ -598,6 +864,7 @@ const Whiteboard = ({
         </div>
         {/* Canvas Container */}
         <div className="relative flex-1" aria-label="Whiteboard canvas area">
+          {/* Drawing Canvas */}
           <canvas
             ref={canvasRef}
             className="absolute inset-0 w-full h-full cursor-crosshair bg-white"
@@ -607,7 +874,9 @@ const Whiteboard = ({
             onClick={handleCanvasClick}
             style={{
               cursor:
-                currentTool === "eraser"
+                currentTool === "select"
+                  ? "default"
+                  : currentTool === "eraser"
                   ? "grab"
                   : currentTool === "text"
                     ? "text"
@@ -617,6 +886,84 @@ const Whiteboard = ({
             aria-label="Drawing canvas"
             tabIndex={0}
           />
+          
+          {/* Insertable Elements */}
+          {elements
+            .filter(element => ["image", "shape", "table", "chart", "icon"].includes(element.type))
+            .map((element) => {
+              const isSelected = selectedElement === element.id;
+              
+              switch (element.type) {
+                case "image":
+                  return (
+                    <ImageElement
+                      key={element.id}
+                      element={element}
+                      isSelected={isSelected}
+                      onSelect={() => handleElementSelect(element.id)}
+                      onUpdate={(updates) => handleElementUpdate(element.id, updates)}
+                      onDelete={() => handleElementDelete(element.id)}
+                      onMove={(x, y) => handleElementUpdate(element.id, { x, y })}
+                      onResize={(width, height) => handleElementUpdate(element.id, { width, height })}
+                    />
+                  );
+                case "shape":
+                  return (
+                    <ShapeElement
+                      key={element.id}
+                      element={element}
+                      isSelected={isSelected}
+                      onSelect={() => handleElementSelect(element.id)}
+                      onUpdate={(updates) => handleElementUpdate(element.id, updates)}
+                      onDelete={() => handleElementDelete(element.id)}
+                      onMove={(x, y) => handleElementUpdate(element.id, { x, y })}
+                      onResize={(width, height) => handleElementUpdate(element.id, { width, height })}
+                    />
+                  );
+                case "table":
+                  return (
+                    <TableElement
+                      key={element.id}
+                      element={element}
+                      isSelected={isSelected}
+                      onSelect={() => handleElementSelect(element.id)}
+                      onUpdate={(updates) => handleElementUpdate(element.id, updates)}
+                      onDelete={() => handleElementDelete(element.id)}
+                      onMove={(x, y) => handleElementUpdate(element.id, { x, y })}
+                      onResize={(width, height) => handleElementUpdate(element.id, { width, height })}
+                    />
+                  );
+                case "chart":
+                  return (
+                    <ChartElement
+                      key={element.id}
+                      element={element}
+                      isSelected={isSelected}
+                      onSelect={() => handleElementSelect(element.id)}
+                      onUpdate={(updates) => handleElementUpdate(element.id, updates)}
+                      onDelete={() => handleElementDelete(element.id)}
+                      onMove={(x, y) => handleElementUpdate(element.id, { x, y })}
+                      onResize={(width, height) => handleElementUpdate(element.id, { width, height })}
+                    />
+                  );
+                case "icon":
+                  return (
+                    <IconElement
+                      key={element.id}
+                      element={element}
+                      isSelected={isSelected}
+                      onSelect={() => handleElementSelect(element.id)}
+                      onUpdate={(updates) => handleElementUpdate(element.id, updates)}
+                      onDelete={() => handleElementDelete(element.id)}
+                      onMove={(x, y) => handleElementUpdate(element.id, { x, y })}
+                      onResize={(width, height) => handleElementUpdate(element.id, { width, height })}
+                    />
+                  );
+                default:
+                  return null;
+              }
+            })}
+          
           {/* Collaborator Cursors */}
           {collaborators.map(
             (collaborator) =>

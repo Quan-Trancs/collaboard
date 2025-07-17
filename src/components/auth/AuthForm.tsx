@@ -20,6 +20,7 @@ import { useForm } from "react-hook-form";
 import { useToast } from "@/components/ui/use-toast";
 import { Eye, EyeOff } from "lucide-react";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { useAuth } from "@/contexts/AuthContext";
 
 interface AuthFormProps {
   onAuthSuccess?: (user: { id: string; email: string; name: string }) => void;
@@ -36,6 +37,7 @@ const AuthForm = ({ onAuthSuccess }: AuthFormProps) => {
   const [isLoading, setIsLoading] = useState(false);
   const { toast } = useToast();
   const [showPassword, setShowPassword] = useState(false);
+  const { signIn, signUp } = useAuth();
 
   const form = useForm<FormData>({
     defaultValues: {
@@ -49,26 +51,26 @@ const AuthForm = ({ onAuthSuccess }: AuthFormProps) => {
     setIsLoading(true);
 
     try {
-      // Simulate API call
-      await new Promise((resolve) => setTimeout(resolve, 1000));
+      if (isLogin) {
+        await signIn(data.email, data.password);
+        toast({
+          title: "Welcome back!",
+          description: `Successfully logged in as ${data.email}`,
+        });
+      } else {
+        await signUp(data.email, data.password, data.name || data.email.split("@")[0]);
+        toast({
+          title: "Account created!",
+          description: "Please check your email to verify your account.",
+        });
+      }
 
-      // Mock successful authentication
-      const user = {
-        id: Math.random().toString(36).substr(2, 9),
-        email: data.email,
-        name: data.name || data.email.split("@")[0],
-      };
-
-      toast({
-        title: isLogin ? "Welcome back!" : "Account created!",
-        description: `Successfully ${isLogin ? "logged in" : "registered"} as ${user.email}`,
-      });
-
-      onAuthSuccess?.(user);
-    } catch (error) {
+      // The AuthContext will handle the user state, so we don't need to call onAuthSuccess here
+      // The parent component should listen to the auth state instead
+    } catch (error: any) {
       toast({
         title: "Authentication failed",
-        description: "Please check your credentials and try again.",
+        description: error.message || "Please check your credentials and try again.",
         variant: "destructive",
       });
     } finally {

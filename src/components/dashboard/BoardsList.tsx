@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -8,10 +8,12 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Plus, Search, Calendar, Users, MoreVertical } from "lucide-react";
+import { Plus, Search, Calendar, Users, MoreVertical, LogOut } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { useToast } from "@/components/ui/use-toast";
+import { boardApi } from "@/lib/api";
+import { Loader2 } from "lucide-react";
 
 interface Board {
   id: string;
@@ -28,12 +30,14 @@ interface BoardsListProps {
   user?: { id: string; email: string; name: string };
   onCreateBoard?: () => void;
   onOpenBoard?: (boardId: string) => void;
+  onLogout?: () => void;
 }
 
 const BoardsList = ({
   user = { id: "1", email: "user@example.com", name: "John Doe" },
   onCreateBoard,
   onOpenBoard,
+  onLogout,
 }: BoardsListProps) => {
   const [searchTerm, setSearchTerm] = useState("");
   const [boards, setBoards] = useState<Board[]>([
