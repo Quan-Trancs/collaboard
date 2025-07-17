@@ -40,42 +40,40 @@ const BoardsList = ({
   onLogout,
 }: BoardsListProps) => {
   const [searchTerm, setSearchTerm] = useState("");
-  const [boards, setBoards] = useState<Board[]>([
-    {
-      id: "1",
-      title: "Project Planning",
-      description: "Initial brainstorming and project roadmap",
-      createdAt: new Date(2024, 0, 15),
-      updatedAt: new Date(2024, 0, 20),
-      collaborators: 3,
-      isShared: true,
-      thumbnail:
-        "https://images.unsplash.com/photo-1611224923853-80b023f02d71?w=400&q=80",
-    },
-    {
-      id: "2",
-      title: "Design System",
-      description: "UI components and design guidelines",
-      createdAt: new Date(2024, 0, 10),
-      updatedAt: new Date(2024, 0, 18),
-      collaborators: 2,
-      isShared: true,
-      thumbnail:
-        "https://images.unsplash.com/photo-1581291518857-4e27b48ff24e?w=400&q=80",
-    },
-    {
-      id: "3",
-      title: "Personal Notes",
-      description: "Quick sketches and ideas",
-      createdAt: new Date(2024, 0, 5),
-      updatedAt: new Date(2024, 0, 16),
-      collaborators: 1,
-      isShared: false,
-      thumbnail:
-        "https://images.unsplash.com/photo-1586281380349-632531db7ed4?w=400&q=80",
-    },
-  ]);
+  const [boards, setBoards] = useState<Board[]>([]);
+  const [loading, setLoading] = useState(true);
   const { toast } = useToast();
+
+  // Fetch boards from Supabase
+  useEffect(() => {
+    const fetchBoards = async () => {
+      setLoading(true);
+      try {
+        const supabaseBoards = await boardApi.getBoards();
+        // Map Supabase boards to local Board type
+        const mappedBoards: Board[] = (supabaseBoards || []).map((b: any) => ({
+          id: b.id,
+          title: b.title,
+          description: b.description,
+          createdAt: b.created_at ? new Date(b.created_at) : new Date(),
+          updatedAt: b.updated_at ? new Date(b.updated_at) : new Date(),
+          collaborators: b.collaborators ? b.collaborators.length : 1,
+          isShared: b.is_public || (b.collaborators && b.collaborators.length > 0),
+          thumbnail: b.thumbnail_url,
+        }));
+        setBoards(mappedBoards);
+      } catch (error: any) {
+        toast({
+          title: "Failed to load boards",
+          description: error.message || "Could not fetch boards from server.",
+          variant: "destructive",
+        });
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchBoards();
+  }, []);
 
   const filteredBoards = boards.filter(
     (board) =>
@@ -83,22 +81,41 @@ const BoardsList = ({
       board.description?.toLowerCase().includes(searchTerm.toLowerCase()),
   );
 
-  const handleCreateBoard = () => {
-    const newBoard: Board = {
-      id: Math.random().toString(36).substr(2, 9),
-      title: "Untitled Board",
-      description: "New whiteboard",
-      createdAt: new Date(),
-      updatedAt: new Date(),
-      collaborators: 1,
-      isShared: false,
-    };
-    setBoards([newBoard, ...boards]);
-    toast({
-      title: "Board created!",
-      description: `A new board has been added to your dashboard.`,
-    });
-    onCreateBoard?.();
+  // Create board using Supabase
+  const handleCreateBoard = async () => {
+    try {
+      setLoading(true);
+      const newBoard = await boardApi.createBoard({
+        title: "Untitled Board",
+        description: "New whiteboard",
+      });
+      toast({
+        title: "Board created!",
+        description: `A new board has been added to your dashboard.`,
+      });
+      // Refetch boards
+      const supabaseBoards = await boardApi.getBoards();
+      const mappedBoards: Board[] = (supabaseBoards || []).map((b: any) => ({
+        id: b.id,
+        title: b.title,
+        description: b.description,
+        createdAt: b.created_at ? new Date(b.created_at) : new Date(),
+        updatedAt: b.updated_at ? new Date(b.updated_at) : new Date(),
+        collaborators: b.collaborators ? b.collaborators.length : 1,
+        isShared: b.is_public || (b.collaborators && b.collaborators.length > 0),
+        thumbnail: b.thumbnail_url,
+      }));
+      setBoards(mappedBoards);
+      onCreateBoard?.();
+    } catch (error: any) {
+      toast({
+        title: "Failed to create board",
+        description: error.message || "Could not create board.",
+        variant: "destructive",
+      });
+    } finally {
+      setLoading(false);
+    }
   };
 
   const formatDate = (date: Date) => {

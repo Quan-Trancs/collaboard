@@ -15,6 +15,8 @@ import { Separator } from "@/components/ui/separator";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Copy, Mail, Check } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { useEffect } from "react";
+import { boardApi } from "@/lib/api";
 
 interface ShareModalProps {
   open?: boolean;
@@ -40,22 +42,35 @@ const ShareModal = ({
   const [permission, setPermission] = useState<"view" | "edit">("view");
   const [email, setEmail] = useState("");
   const [copied, setCopied] = useState(false);
-  const [collaborators, setCollaborators] = useState<Collaborator[]>([
-    {
-      id: "1",
-      name: "Jane Smith",
-      email: "jane@example.com",
-      avatarUrl: "https://api.dicebear.com/7.x/avataaars/svg?seed=jane",
-      permission: "edit",
-    },
-    {
-      id: "2",
-      name: "John Doe",
-      email: "john@example.com",
-      avatarUrl: "https://api.dicebear.com/7.x/avataaars/svg?seed=john",
-      permission: "view",
-    },
-  ]);
+  const [collaborators, setCollaborators] = useState<Collaborator[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  // Helper to map Supabase collaborator to Collaborator
+  function mapSupabaseCollaborator(c: any): Collaborator {
+    return {
+      id: c.user?.id || c.id || "",
+      name: c.user?.name || c.name || "Unknown",
+      email: c.user?.email || c.email || "",
+      avatarUrl: c.user?.avatar_url || `https://api.dicebear.com/7.x/avataaars/svg?seed=${c.user?.name || c.name || "user"}`,
+      permission: c.permission === "edit" ? "edit" : "view",
+    };
+  }
+  // Fetch collaborators on mount/boardId change
+  useEffect(() => {
+    const fetchCollaborators = async () => {
+      setLoading(true);
+      try {
+        const board = await boardApi.getBoard(boardId);
+        const collaboratorsArray = (board && Array.isArray((board as any).collaborators)) ? (board as any).collaborators : [];
+        setCollaborators(collaboratorsArray.map(mapSupabaseCollaborator));
+      } catch (error) {
+        // Optionally show error toast
+      } finally {
+        setLoading(false);
+      }
+    };
+    if (boardId) fetchCollaborators();
+  }, [boardId]);
 
   const shareLink = `https://example.com/board/${boardId}?access=${permission}`;
 
@@ -65,36 +80,61 @@ const ShareModal = ({
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const handleInvite = (e: React.FormEvent) => {
+  // Invite collaborator
+  const handleInvite = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (email) {
-      // In a real app, this would send an invitation
-      // For now, just add to the collaborators list
-      const newCollaborator: Collaborator = {
-        id: `${Date.now()}`,
-        name: email.split("@")[0],
-        email,
-        avatarUrl: `https://api.dicebear.com/7.x/avataaars/svg?seed=${email}`,
-        permission,
-      };
-      setCollaborators([...collaborators, newCollaborator]);
-      setEmail("");
+    if (email && boardId) {
+      setLoading(true);
+      try {
+        await boardApi.addCollaborator(boardId, email, permission);
+        // Refetch collaborators
+        const board = await boardApi.getBoard(boardId);
+        const collaboratorsArray = (board && Array.isArray((board as any).collaborators)) ? (board as any).collaborators : [];
+        setCollaborators(collaboratorsArray.map(mapSupabaseCollaborator));
+        setEmail("");
+      } catch (error: any) {
+        // Optionally show error toast
+      } finally {
+        setLoading(false);
+      }
     }
   };
-
-  const updateCollaboratorPermission = (
+  // Update collaborator permission
+  const updateCollaboratorPermission = async (
     id: string,
     newPermission: "view" | "edit",
   ) => {
-    setCollaborators(
-      collaborators.map((c) =>
-        c.id === id ? { ...c, permission: newPermission } : c,
-      ),
-    );
+    if (boardId) {
+      setLoading(true);
+      try {
+        await boardApi.updateCollaboratorPermission(boardId, id, newPermission);
+        // Refetch collaborators
+        const board = await boardApi.getBoard(boardId);
+        const collaboratorsArray = (board && Array.isArray((board as any).collaborators)) ? (board as any).collaborators : [];
+        setCollaborators(collaboratorsArray.map(mapSupabaseCollaborator));
+      } catch (error: any) {
+        // Optionally show error toast
+      } finally {
+        setLoading(false);
+      }
+    }
   };
-
-  const removeCollaborator = (id: string) => {
-    setCollaborators(collaborators.filter((c) => c.id !== id));
+  // Remove collaborator
+  const removeCollaborator = async (id: string) => {
+    if (boardId) {
+      setLoading(true);
+      try {
+        await boardApi.removeCollaborator(boardId, id);
+        // Refetch collaborators
+        const board = await boardApi.getBoard(boardId);
+        const collaboratorsArray = (board && Array.isArray((board as any).collaborators)) ? (board as any).collaborators : [];
+        setCollaborators(collaboratorsArray.map(mapSupabaseCollaborator));
+      } catch (error: any) {
+        // Optionally show error toast
+      } finally {
+        setLoading(false);
+      }
+    }
   };
 
   return (

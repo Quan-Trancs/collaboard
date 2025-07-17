@@ -26,6 +26,7 @@ import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip
 import { useToast } from "@/components/ui/use-toast";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { ImageElement, ShapeElement, TableElement, ChartElement, IconElement } from "./InsertableElements";
+import { elementApi, boardApi, realtimeApi } from "@/lib/api";
 
 interface WhiteboardProps {
   boardId?: string;
@@ -81,6 +82,8 @@ const Whiteboard = ({
   const [currentColor, setCurrentColor] = useState("#000000");
   const [strokeWidth, setStrokeWidth] = useState(2);
   const [elements, setElements] = useState<DrawingElement[]>([]);
+  const [collaborators, setCollaborators] = useState<Collaborator[]>([]);
+  const [loading, setLoading] = useState(true);
   const [history, setHistory] = useState<DrawingElement[][]>([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
   const [showShareModal, setShowShareModal] = useState(false);
@@ -88,20 +91,6 @@ const Whiteboard = ({
   const [textInput, setTextInput] = useState("");
   const [textPosition, setTextPosition] = useState({ x: 0, y: 0 });
   const [selectedElement, setSelectedElement] = useState<string | null>(null);
-  const [collaborators] = useState<Collaborator[]>([
-    {
-      id: "2",
-      name: "Jane Smith",
-      color: "#3B82F6",
-      cursor: { x: 150, y: 200 },
-    },
-    {
-      id: "3",
-      name: "Mike Johnson",
-      color: "#10B981",
-      cursor: { x: 300, y: 150 },
-    },
-  ]);
   const { toast } = useToast();
   const [showClearDialog, setShowClearDialog] = useState(false);
 
@@ -214,6 +203,86 @@ const Whiteboard = ({
     setHistoryIndex(newHistory.length - 1);
   }, [elements, history, historyIndex]);
 
+  // Helper to map Supabase element to DrawingElement
+  function mapSupabaseElementToDrawingElement(el: any): DrawingElement {
+    return {
+      id: el.id,
+      type: el.type,
+      x: el.position?.x ?? 0,
+      y: el.position?.y ?? 0,
+      width: el.size?.width,
+      height: el.size?.height,
+      color: el.data?.color || "#000000",
+      strokeWidth: el.data?.strokeWidth || 2,
+      points: el.data?.points,
+      text: el.data?.text,
+      src: el.data?.src,
+      alt: el.data?.alt,
+      opacity: el.data?.opacity,
+      borderRadius: el.data?.borderRadius,
+      shapeType: el.data?.shapeType,
+      fillColor: el.data?.fillColor,
+      data: el.data?.data,
+      symbol: el.data?.symbol,
+      rows: el.data?.rows,
+      cols: el.data?.cols,
+      chartType: el.data?.chartType,
+      colors: el.data?.colors,
+    };
+  }
+  // Helper to map Supabase collaborator to Collaborator
+  function mapSupabaseCollaborator(c: any): Collaborator {
+    return {
+      id: c.user?.id || c.id || "",
+      name: c.user?.name || c.name || "Unknown",
+      color: "#3B82F6",
+      cursor: null,
+    };
+  }
+
+  // Fetch elements and collaborators from Supabase
+  useEffect(() => {
+    let unsubscribeElements: any;
+    let unsubscribeCollaborators: any;
+    const fetchData = async () => {
+      setLoading(true);
+      try {
+        // Fetch elements
+        const supabaseElements = await elementApi.getElements(boardId);
+        const mappedElements: DrawingElement[] = (supabaseElements || []).map(mapSupabaseElementToDrawingElement);
+        setElements(mappedElements);
+        // Fetch collaborators
+        const board = await boardApi.getBoard(boardId);
+        const collaboratorsArray = (board && Array.isArray((board as any).collaborators)) ? (board as any).collaborators : [];
+        const mappedCollaborators: Collaborator[] = collaboratorsArray.map(mapSupabaseCollaborator);
+        setCollaborators(mappedCollaborators);
+        // Subscribe to real-time updates
+        unsubscribeElements = realtimeApi.subscribeToBoard(boardId, async () => {
+          const updatedElements = await elementApi.getElements(boardId);
+          setElements((updatedElements || []).map(mapSupabaseElementToDrawingElement));
+        });
+        unsubscribeCollaborators = realtimeApi.subscribeToCollaborators(boardId, async () => {
+          const board = await boardApi.getBoard(boardId);
+          const collaboratorsArray = (board && Array.isArray((board as any).collaborators)) ? (board as any).collaborators : [];
+          setCollaborators(collaboratorsArray.map(mapSupabaseCollaborator));
+        });
+      } catch (error: any) {
+        toast({
+          title: "Failed to load board data",
+          description: error.message || "Could not fetch board data from server.",
+          variant: "destructive",
+        });
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchData();
+    return () => {
+      if (unsubscribeElements) unsubscribeElements.unsubscribe();
+      if (unsubscribeCollaborators) unsubscribeCollaborators.unsubscribe();
+    };
+  }, [boardId]);
+
   // Mouse event handlers
   const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
     if (isTextMode || currentTool === "select") return;
@@ -294,20 +363,27 @@ const Whiteboard = ({
   };
 
   // Add text to canvas
-  const addText = () => {
+  const addText = async () => {
     if (textInput.trim()) {
-      const newElement: DrawingElement = {
-        id: Date.now().toString(),
-        type: "text",
-        x: textPosition.x,
-        y: textPosition.y,
-        text: textInput,
-        color: currentColor,
-        strokeWidth,
-      };
-
-      setElements((prev) => [...prev, newElement]);
-      saveToHistory();
+      try {
+        setLoading(true);
+        const newElement = await elementApi.createElement({
+          board_id: boardId,
+          type: "text",
+          data: { text: textInput, color: currentColor, strokeWidth },
+          position: { x: textPosition.x, y: textPosition.y },
+        });
+        setElements((prev) => [...prev, mapSupabaseElementToDrawingElement(newElement)]);
+        saveToHistory();
+      } catch (error: any) {
+        toast({
+          title: "Failed to add text",
+          description: error.message || "Could not add text to board.",
+          variant: "destructive",
+        });
+      } finally {
+        setLoading(false);
+      }
     }
 
     setIsTextMode(false);
@@ -559,18 +635,42 @@ const Whiteboard = ({
   };
 
   // Handle element update
-  const handleElementUpdate = (elementId: string, updates: any) => {
-    setElements(prev => prev.map(element => 
-      element.id === elementId ? { ...element, ...updates } : element
-    ));
-    saveToHistory();
+  const handleElementUpdate = async (elementId: string, updates: any) => {
+    try {
+      setLoading(true);
+      const updated = await elementApi.updateElement(elementId, updates);
+      setElements(prev => prev.map(element => 
+        element.id === elementId ? mapSupabaseElementToDrawingElement(updated) : element
+      ));
+      saveToHistory();
+    } catch (error: any) {
+      toast({
+        title: "Failed to update element",
+        description: error.message || "Could not update element.",
+        variant: "destructive",
+      });
+    } finally {
+      setLoading(false);
+    }
   };
 
   // Handle element deletion
-  const handleElementDelete = (elementId: string) => {
-    setElements(prev => prev.filter(element => element.id !== elementId));
-    setSelectedElement(null);
-    saveToHistory();
+  const handleElementDelete = async (elementId: string) => {
+    try {
+      setLoading(true);
+      await elementApi.deleteElement(elementId);
+      setElements(prev => prev.filter(element => element.id !== elementId));
+      setSelectedElement(null);
+      saveToHistory();
+    } catch (error: any) {
+      toast({
+        title: "Failed to delete element",
+        description: error.message || "Could not delete element.",
+        variant: "destructive",
+      });
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
