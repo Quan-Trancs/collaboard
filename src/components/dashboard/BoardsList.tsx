@@ -1,413 +1,342 @@
-import React, { useState, useEffect } from "react";
-import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Plus, Search, Calendar, Users, MoreVertical, LogOut, AlertTriangle } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
-import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
-import { useToast } from "@/components/ui/use-toast";
-import { boardApi } from "@/lib/api";
-import { Loader2 } from "lucide-react";
-import { ErrorHandler, handleAsyncError } from "@/lib/errorHandler";
-import { BoardCardSkeleton, RetryButton } from "@/components/ui/loading";
+/**
+ * Boards List Component
+ * Optimized with React.memo and better error handling
+ */
 
-interface Board {
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
+import { Plus, Search, LogOut, Loader2, Trash2 } from 'lucide-react';
+import { boardApi } from '@/lib/api';
+import { ErrorHandler, handleAsyncError } from '@/lib/errorHandler';
+import { useToast } from '@/components/ui/use-toast';
+import { useAuth } from '@/contexts/AuthContext';
+import type { Board } from '@/types';
+
+interface BoardsListProps {
+  user: { id: string; email: string; name: string };
+  onCreateBoard: (boardId?: string) => void;
+  onOpenBoard: (boardId: string) => void;
+  onLogout: () => void;
+}
+
+interface LocalBoard {
   id: string;
   title: string;
   description?: string;
-  createdAt: Date;
-  updatedAt: Date;
-  collaborators: number;
-  isShared: boolean;
-  thumbnail?: string;
+  owner_id: string;
+  thumbnail_url?: string;
+  is_public: boolean;
+  created_at: string;
+  updated_at: string;
 }
 
-interface BoardsListProps {
-  user?: { id: string; email: string; name: string };
-  onCreateBoard?: () => void;
-  onOpenBoard?: (boardId: string) => void;
-  onLogout?: () => void;
-}
+const BoardCard = React.memo<{
+  board: LocalBoard;
+  onOpen: (id: string) => void;
+  onDelete: (id: string) => void;
+  isOwner: boolean;
+}>(({ board, onOpen, onDelete, isOwner }) => {
+  const handleClick = useCallback(() => {
+    onOpen(board.id);
+  }, [board.id, onOpen]);
 
-const BoardsList = ({
-  user = { id: "1", email: "user@example.com", name: "John Doe" },
+  const handleDelete = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation(); // Prevent card click
+    onDelete(board.id);
+  }, [board.id, onDelete]);
+
+  return (
+    <Card
+      className="cursor-pointer hover:shadow-lg transition-shadow relative"
+      onClick={handleClick}
+    >
+      <CardHeader>
+        <div className="flex items-start justify-between">
+          <CardTitle className="text-lg pr-8">{board.title}</CardTitle>
+          <div className="flex items-center gap-2">
+            {isOwner && <Badge variant="secondary">Owner</Badge>}
+            {board.is_public && <Badge variant="outline">Public</Badge>}
+            {isOwner && (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8 text-red-600 hover:text-red-700 hover:bg-red-50"
+                onClick={handleDelete}
+                aria-label={`Delete ${board.title}`}
+              >
+                <Trash2 className="h-4 w-4" />
+              </Button>
+            )}
+          </div>
+        </div>
+        {board.description && (
+          <CardDescription className="mt-2">{board.description}</CardDescription>
+        )}
+      </CardHeader>
+      <CardContent>
+        <p className="text-sm text-gray-500">
+          Updated {new Date(board.updated_at).toLocaleDateString()}
+        </p>
+      </CardContent>
+    </Card>
+  );
+});
+
+BoardCard.displayName = 'BoardCard';
+
+const BoardsList: React.FC<BoardsListProps> = ({
+  user,
   onCreateBoard,
   onOpenBoard,
   onLogout,
-}: BoardsListProps) => {
-  const [searchTerm, setSearchTerm] = useState("");
-  const [boards, setBoards] = useState<Board[]>([]);
+}) => {
+  const [boards, setBoards] = useState<LocalBoard[]>([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [creating, setCreating] = useState(false);
-  const [createError, setCreateError] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [isCreating, setIsCreating] = useState(false);
+  const [boardToDelete, setBoardToDelete] = useState<LocalBoard | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
   const { toast } = useToast();
+  const { user: authUser } = useAuth();
 
-  // Fetch boards from Supabase
+  const fetchBoards = useCallback(async () => {
+    setLoading(true);
+    try {
+      const fetchedBoards = await boardApi.getBoards();
+      setBoards(fetchedBoards as LocalBoard[]);
+    } catch (error) {
+      handleAsyncError(() => Promise.reject(error), 'BoardsList.fetchBoards');
+      toast({
+        title: 'Error',
+        description: 'Failed to load boards. Please try again.',
+        variant: 'destructive',
+      });
+    } finally {
+      setLoading(false);
+    }
+  }, [toast]);
+
   useEffect(() => {
-    const fetchBoards = async () => {
-      setLoading(true);
-      setError(null);
+    fetchBoards();
+  }, [fetchBoards]);
 
-      const { data, error: fetchError } = await handleAsyncError(
+  const handleCreateBoard = useCallback(async () => {
+    if (isCreating) return;
+    
+    // Check if user is authenticated
+    if (!authUser) {
+      toast({
+        title: 'Authentication Required',
+        description: 'Please log in to create a board.',
+        variant: 'destructive',
+      });
+      return;
+    }
+    
+    setIsCreating(true);
+    try {
+      const result = await handleAsyncError(
         async () => {
-          const supabaseBoards = await boardApi.getBoards();
-          // Map Supabase boards to local Board type
-          return (supabaseBoards || []).map((b: any) => ({
-            id: b.id,
-            title: b.title,
-            description: b.description,
-            createdAt: b.created_at ? new Date(b.created_at) : new Date(),
-            updatedAt: b.updated_at ? new Date(b.updated_at) : new Date(),
-            collaborators: b.collaborators ? b.collaborators.length : 1,
-            isShared: b.is_public || (b.collaborators && b.collaborators.length > 0),
-            thumbnail: b.thumbnail_url,
-          }));
+          const board = await boardApi.createBoard({
+            title: 'Untitled Board',
+            description: '',
+            is_public: false,
+          });
+          return board;
         },
-        "BoardsList.fetchBoards"
+        'BoardsList.createBoard'
       );
 
-      if (fetchError) {
-        setError(fetchError.message);
-        toast(ErrorHandler.getToastConfig(fetchError));
-      } else if (data) {
-        setBoards(data);
+      if (result?.data) {
+        await fetchBoards();
+        onCreateBoard(result.data.id);
+      } else if (result?.error) {
+        // Show error toast with specific message
+        const errorMessage = result.error.message || 'Failed to create board. Please try again.';
+        toast({
+          title: result.error.code === 'NO_TOKEN' ? 'Authentication Required' : 'Error',
+          description: errorMessage,
+          variant: 'destructive',
+        });
+        
+        // If no token, user needs to log in - could redirect here if needed
+        if (result.error.code === 'NO_TOKEN') {
+          // Optionally redirect to login or refresh auth
+          // User needs to log in
+        }
       }
+    } catch (error) {
+      const appError = ErrorHandler.createError(error, 'BoardsList.createBoard');
+      toast({
+        title: 'Error',
+        description: appError.message || 'Failed to create board. Please try again.',
+        variant: 'destructive',
+      });
+    } finally {
+      setIsCreating(false);
+    }
+  }, [isCreating, onCreateBoard, fetchBoards, toast, authUser]);
 
-      setLoading(false);
-    };
-    fetchBoards();
-  }, []);
+  const filteredBoards = useMemo(() => {
+    if (!searchQuery.trim()) return boards;
+    const query = searchQuery.toLowerCase();
+    return boards.filter(
+      (board) =>
+        board.title.toLowerCase().includes(query) ||
+        board.description?.toLowerCase().includes(query)
+    );
+  }, [boards, searchQuery]);
 
-  const filteredBoards = boards.filter(
-    (board) =>
-      board.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      board.description?.toLowerCase().includes(searchTerm.toLowerCase()),
+  const isOwner = useCallback(
+    (board: LocalBoard) => board.owner_id === user.id,
+    [user.id]
   );
 
-  // Create board using Supabase
-  const handleCreateBoard = async () => {
-    setCreating(true);
-    setCreateError(null);
-    const { data, error: createErrorObj } = await handleAsyncError(
-      async () => {
-        const newBoard = await boardApi.createBoard({
-          title: "Untitled Board",
-          description: "New whiteboard",
-        });
-        // Refetch boards after creation
-        const supabaseBoards = await boardApi.getBoards();
-        return (supabaseBoards || []).map((b: any) => ({
-          id: b.id,
-          title: b.title,
-          description: b.description,
-          createdAt: b.created_at ? new Date(b.created_at) : new Date(),
-          updatedAt: b.updated_at ? new Date(b.updated_at) : new Date(),
-          collaborators: b.collaborators ? b.collaborators.length : 1,
-          isShared: b.is_public || (b.collaborators && b.collaborators.length > 0),
-          thumbnail: b.thumbnail_url,
-        }));
-      },
-      "BoardsList.createBoard"
-    );
-    if (createErrorObj) {
-      setCreateError(createErrorObj.message);
-      toast(ErrorHandler.getToastConfig(createErrorObj));
-    } else if (data) {
-      setBoards(data);
-      toast({
-        title: "Board created!",
-        description: "A new board has been added to your dashboard.",
-      });
-      onCreateBoard?.();
+  const handleDeleteClick = useCallback((boardId: string) => {
+    const board = boards.find(b => b.id === boardId);
+    if (board) {
+      setBoardToDelete(board);
     }
-    setCreating(false);
-  };
+  }, [boards]);
 
-  const formatDate = (date: Date) => {
-    return date.toLocaleDateString("en-US", {
-      month: "short",
-      day: "numeric",
-      year: "numeric",
-    });
-  };
+  const handleConfirmDelete = useCallback(async () => {
+    if (!boardToDelete || isDeleting) return;
 
-  // Replace error state UI
-  if (error && !loading) {
-    return (
-      <div className="min-h-screen bg-gray-50 p-6 flex items-center justify-center">
-        <RetryButton
-          error={error}
-          onRetry={() => window.location.reload()}
-          isLoading={loading}
-        />
-      </div>
-    );
-  }
-  // Replace loading state UI
+    setIsDeleting(true);
+    try {
+      await boardApi.deleteBoard(boardToDelete.id);
+      
+      // Remove board from local state
+      setBoards(prev => prev.filter(b => b.id !== boardToDelete.id));
+      
+      toast({
+        title: 'Board deleted',
+        description: `"${boardToDelete.title}" has been deleted successfully.`,
+      });
+      
+      setBoardToDelete(null);
+    } catch (error) {
+      handleAsyncError(() => Promise.reject(error), 'BoardsList.deleteBoard');
+      toast({
+        title: 'Error',
+        description: 'Failed to delete board. Please try again.',
+        variant: 'destructive',
+      });
+    } finally {
+      setIsDeleting(false);
+    }
+  }, [boardToDelete, isDeleting, toast]);
+
   if (loading) {
     return (
-      <div className="min-h-screen bg-gray-50 p-6">
-        <div className="max-w-7xl mx-auto">
-          <div className="mb-8">
-            <div className="flex items-center justify-between mb-4">
-              <div>
-                <h1 className="text-3xl font-bold text-gray-900">
-                  Welcome back!
-                </h1>
-                <p className="text-gray-600 mt-1">
-                  Loading your whiteboards...
-                </p>
-              </div>
-            </div>
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            {Array.from({ length: 6 }).map((_, i) => (
-              <BoardCardSkeleton key={i} />
-            ))}
-          </div>
+      <div className="w-screen h-screen bg-gray-50 flex items-center justify-center">
+        <div className="flex flex-col items-center gap-4">
+          <Loader2 className="h-8 w-8 animate-spin text-blue-600" />
+          <span className="text-lg font-medium">Loading your boards...</span>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 p-6">
-      <div className="max-w-7xl mx-auto">
-        {/* Header */}
-        <div className="mb-8">
-          <div className="flex items-center justify-between mb-4">
-            <div>
-              <h1 className="text-3xl font-bold text-gray-900">
-                Welcome back, {user.name}!
-              </h1>
-              <p className="text-gray-600 mt-1">
-                Manage your whiteboards and collaborate with your team
-              </p>
-            </div>
-            {createError ? (
-              <RetryButton
-                error={createError}
-                onRetry={handleCreateBoard}
-                isLoading={creating}
-                className="w-full"
-              />
-            ) : (
-              <Button
-                onClick={handleCreateBoard}
-                className="flex items-center gap-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                aria-label="Create new board"
-                disabled={creating}
-              >
-                {creating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
-                {creating ? "Creating..." : "New Board"}
+    <div className="w-screen h-screen bg-gray-50 flex flex-col">
+      {/* Header */}
+      <header className="bg-white border-b border-gray-200 px-6 py-4">
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-2xl font-bold text-gray-900">My Boards</h1>
+            <p className="text-sm text-gray-600 mt-1">Welcome back, {user.name}</p>
+          </div>
+          <div className="flex items-center gap-3">
+            <Button onClick={handleCreateBoard} disabled={isCreating}>
+              <Plus className="h-4 w-4 mr-2" />
+              {isCreating ? 'Creating...' : 'New Board'}
+            </Button>
+            <Button variant="outline" onClick={onLogout}>
+              <LogOut className="h-4 w-4 mr-2" />
+              Logout
+            </Button>
+          </div>
+        </div>
+      </header>
+
+      {/* Search */}
+      <div className="px-6 py-4">
+        <div className="relative max-w-md">
+          <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
+          <Input
+            type="text"
+            placeholder="Search boards..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="pl-10"
+          />
+        </div>
+      </div>
+
+      {/* Boards Grid */}
+      <div className="flex-1 overflow-y-auto px-6 pb-6">
+        {filteredBoards.length === 0 ? (
+          <div className="flex flex-col items-center justify-center h-full text-center">
+            <p className="text-lg text-gray-600 mb-4">
+              {searchQuery ? 'No boards found matching your search.' : "You don't have any boards yet."}
+            </p>
+            {!searchQuery && (
+              <Button onClick={handleCreateBoard} disabled={isCreating}>
+                <Plus className="h-4 w-4 mr-2" />
+                Create Your First Board
               </Button>
             )}
           </div>
-
-          {/* Search */}
-          <div className="relative max-w-md">
-            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-4 w-4" />
-            <Input
-              placeholder="Search boards..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="pl-10 focus:outline-none focus:ring-2 focus:ring-blue-500"
-              aria-label="Search boards"
-            />
-          </div>
-        </div>
-
-        {/* Stats */}
-        <section aria-label="Board statistics" className="mb-8">
-          <h2 className="sr-only">Board statistics</h2>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            <Card className="bg-white">
-              <CardContent className="p-6">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-sm font-medium text-gray-600">
-                      Total Boards
-                    </p>
-                    <p className="text-2xl font-bold text-gray-900">
-                      {boards.length}
-                    </p>
-                  </div>
-                  <div className="h-12 w-12 bg-blue-100 rounded-lg flex items-center justify-center">
-                    <Plus className="h-6 w-6 text-blue-600" />
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card className="bg-white">
-              <CardContent className="p-6">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-sm font-medium text-gray-600">
-                      Shared Boards
-                    </p>
-                    <p className="text-2xl font-bold text-gray-900">
-                      {boards.filter((b) => b.isShared).length}
-                    </p>
-                  </div>
-                  <div className="h-12 w-12 bg-green-100 rounded-lg flex items-center justify-center">
-                    <Users className="h-6 w-6 text-green-600" />
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card className="bg-white">
-              <CardContent className="p-6">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-sm font-medium text-gray-600">
-                      Collaborators
-                    </p>
-                    <p className="text-2xl font-bold text-gray-900">
-                      {boards.reduce((sum, b) => sum + b.collaborators, 0)}
-                    </p>
-                  </div>
-                  <div className="h-12 w-12 bg-purple-100 rounded-lg flex items-center justify-center">
-                    <Users className="h-6 w-6 text-purple-600" />
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          </div>
-        </section>
-
-        {/* Boards Grid */}
-        <section aria-label="Boards list">
-          <h2 className="sr-only">Boards</h2>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
             {filteredBoards.map((board) => (
-              <Card
+              <BoardCard
                 key={board.id}
-                className="bg-white hover:shadow-lg transition-shadow cursor-pointer group focus-within:ring-2 focus-within:ring-blue-500"
-                tabIndex={0}
-                role="button"
-                aria-label={`Open board: ${board.title}`}
-                onClick={() => onOpenBoard?.(board.id)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' || e.key === ' ') {
-                    onOpenBoard?.(board.id);
-                  }
-                }}
-              >
-                <div className="relative">
-                  {/* Thumbnail */}
-                  <div className="aspect-video bg-gray-100 rounded-t-lg overflow-hidden">
-                    {board.thumbnail ? (
-                      <img
-                        src={board.thumbnail}
-                        alt={board.title}
-                        className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
-                      />
-                    ) : (
-                      <div className="w-full h-full bg-gradient-to-br from-blue-100 to-purple-100 flex items-center justify-center">
-                        <Plus className="h-8 w-8 text-gray-400" />
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Content */}
-                  <CardContent className="p-4">
-                    <div className="flex items-start justify-between mb-2">
-                      <h3 className="font-semibold text-gray-900 truncate flex-1">
-                        {board.title}
-                      </h3>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity focus:opacity-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                            aria-label="Board options"
-                            tabIndex={0}
-                          >
-                            <MoreVertical className="h-4 w-4" />
-                          </Button>
-                        </TooltipTrigger>
-                        <TooltipContent>More options</TooltipContent>
-                      </Tooltip>
-                    </div>
-
-                    {board.description && (
-                      <p className="text-sm text-gray-600 mb-3 line-clamp-2">
-                        {board.description}
-                      </p>
-                    )}
-
-                    <div className="flex items-center justify-between text-xs text-gray-500">
-                      <div className="flex items-center gap-1">
-                        <Calendar className="h-3 w-3" />
-                        {formatDate(board.updatedAt)}
-                      </div>
-
-                      <div className="flex items-center gap-2">
-                        {board.isShared && (
-                          <Badge variant="secondary" className="text-xs">
-                            <Users className="h-3 w-3 mr-1" />
-                            {board.collaborators}
-                          </Badge>
-                        )}
-                      </div>
-                    </div>
-                  </CardContent>
-                </div>
-              </Card>
+                board={board}
+                onOpen={onOpenBoard}
+                onDelete={handleDeleteClick}
+                isOwner={isOwner(board)}
+              />
             ))}
-
-            {/* Create New Board Card */}
-            <Card
-              className="bg-white border-2 border-dashed border-gray-300 hover:border-gray-400 transition-colors cursor-pointer group focus-within:ring-2 focus-within:ring-blue-500"
-              tabIndex={0}
-              role="button"
-              aria-label="Create new board"
-              onClick={handleCreateBoard}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') {
-                  handleCreateBoard();
-                }
-              }}
-            >
-              <CardContent className="p-6 flex flex-col items-center justify-center h-full min-h-[200px]">
-                <div className="h-12 w-12 bg-gray-100 rounded-lg flex items-center justify-center mb-4 group-hover:bg-gray-200 transition-colors">
-                  <Plus className="h-6 w-6 text-gray-400" />
-                </div>
-                <h3 className="font-medium text-gray-900 mb-1">
-                  Create New Board
-                </h3>
-                <p className="text-sm text-gray-500 text-center">
-                  Start a new whiteboard for your next project
-                </p>
-              </CardContent>
-            </Card>
-          </div>
-        </section>
-
-        {filteredBoards.length === 0 && searchTerm && (
-          <div className="text-center py-12">
-            <Search className="h-12 w-12 text-gray-400 mx-auto mb-4" />
-            <h3 className="text-lg font-medium text-gray-900 mb-2">
-              No boards found
-            </h3>
-            <p className="text-gray-500">
-              Try adjusting your search terms or create a new board.
-            </p>
           </div>
         )}
       </div>
+
+      {/* Delete Confirmation Dialog */}
+      <Dialog open={!!boardToDelete} onOpenChange={(open) => !open && setBoardToDelete(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete Board</DialogTitle>
+          </DialogHeader>
+          <p>
+            Are you sure you want to delete <strong>"{boardToDelete?.title}"</strong>? 
+            This action cannot be undone and all data will be permanently removed.
+          </p>
+          <DialogFooter>
+            <Button 
+              variant="secondary" 
+              onClick={() => setBoardToDelete(null)}
+              disabled={isDeleting}
+            >
+              Cancel
+            </Button>
+            <Button 
+              variant="destructive" 
+              onClick={handleConfirmDelete}
+              disabled={isDeleting}
+            >
+              {isDeleting ? 'Deleting...' : 'Delete Board'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };
 
-export default BoardsList;
+export default React.memo(BoardsList);

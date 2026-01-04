@@ -232,6 +232,17 @@ const AuthForm = ({ onAuthSuccess }: AuthFormProps) => {
                 : "Already have an account? Sign in"}
             </button>
           </div>
+          {/* Inline error message for login */}
+          {loginError && (
+            <div className="mt-2 p-3 bg-red-50 border border-red-200 rounded-md">
+              <p className="text-sm text-red-800">
+                {loginError.includes('Invalid') || loginError.includes('credentials')
+                  ? 'Invalid email or password. Please check your credentials and try again.'
+                  : loginError}
+              </p>
+            </div>
+          )}
+
           {/* Toast area for screen readers */}
           <div aria-live="polite" className="sr-only"></div>
           {/* Error overlays for async actions */}
