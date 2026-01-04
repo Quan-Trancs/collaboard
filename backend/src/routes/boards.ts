@@ -1,4 +1,5 @@
 import express, { Response } from 'express';
+import mongoose from 'mongoose';
 import { Board } from '../models/Board.js';
 import { BoardElement } from '../models/BoardElement.js';
 import { BoardCollaborator } from '../models/BoardCollaborator.js';
@@ -56,8 +57,16 @@ router.get('/:id', async (req: AuthRequest, res: Response) => {
     const boardId = req.params.id;
     const userId = req.userId!;
 
+    if (!boardId || !mongoose.Types.ObjectId.isValid(boardId)) {
+      res.status(400).json({ error: 'Invalid board ID' });
+      return;
+    }
+
+    const boardObjectId = new mongoose.Types.ObjectId(boardId);
+    const userObjectId = new mongoose.Types.ObjectId(userId);
+
     // Check if user has access
-    const board = await Board.findById(boardId);
+    const board = await Board.findById(boardObjectId);
     if (!board) {
       res.status(404).json({ error: 'Board not found' });
       return;
@@ -65,8 +74,8 @@ router.get('/:id', async (req: AuthRequest, res: Response) => {
 
     const isOwner = board.owner_id.toString() === userId;
     const collaboration = await BoardCollaborator.findOne({
-      board_id: boardId,
-      user_id: userId,
+      board_id: boardObjectId,
+      user_id: userObjectId,
     });
 
     if (!isOwner && !collaboration && !board.is_public) {
@@ -75,7 +84,7 @@ router.get('/:id', async (req: AuthRequest, res: Response) => {
     }
 
     // Get elements
-    const elements = await BoardElement.find({ board_id: boardId }).sort({ createdAt: 1 });
+    const elements = await BoardElement.find({ board_id: boardObjectId }).sort({ createdAt: 1 });
 
     res.json({
       id: board._id.toString(),
@@ -134,7 +143,15 @@ router.put('/:id', async (req: AuthRequest, res: Response) => {
     const userId = req.userId!;
     const { title, description, is_public } = req.body;
 
-    const board = await Board.findById(boardId);
+    if (!boardId || !mongoose.Types.ObjectId.isValid(boardId)) {
+      res.status(400).json({ error: 'Invalid board ID' });
+      return;
+    }
+
+    const boardObjectId = new mongoose.Types.ObjectId(boardId);
+    const userObjectId = new mongoose.Types.ObjectId(userId);
+
+    const board = await Board.findById(boardObjectId);
     if (!board) {
       res.status(404).json({ error: 'Board not found' });
       return;
@@ -143,8 +160,8 @@ router.put('/:id', async (req: AuthRequest, res: Response) => {
     // Check if user is owner or admin collaborator
     const isOwner = board.owner_id.toString() === userId;
     const collaboration = await BoardCollaborator.findOne({
-      board_id: boardId,
-      user_id: userId,
+      board_id: boardObjectId,
+      user_id: userObjectId,
       permission: 'admin',
     });
 
@@ -158,7 +175,7 @@ router.put('/:id', async (req: AuthRequest, res: Response) => {
     if (description !== undefined) updates.description = description;
     if (is_public !== undefined) updates.is_public = is_public;
 
-    const updatedBoard = await Board.findByIdAndUpdate(boardId, updates, {
+    const updatedBoard = await Board.findByIdAndUpdate(boardObjectId, updates, {
       new: true,
       runValidators: true,
     });
@@ -183,7 +200,14 @@ router.delete('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
   const boardId = req.params.id;
   const userId = req.userId!;
 
-  const board = await Board.findById(boardId);
+  if (!boardId || !mongoose.Types.ObjectId.isValid(boardId)) {
+    res.status(400).json({ error: 'Invalid board ID', code: 'INVALID_BOARD_ID' });
+    return;
+  }
+
+  const boardObjectId = new mongoose.Types.ObjectId(boardId);
+
+  const board = await Board.findById(boardObjectId);
   if (!board) {
     res.status(404).json({ error: 'Board not found', code: 'BOARD_NOT_FOUND' });
     return;
@@ -197,9 +221,9 @@ router.delete('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
 
   // Delete board, elements, and collaborators in parallel
   await Promise.all([
-    Board.findByIdAndDelete(boardId),
-    BoardElement.deleteMany({ board_id: boardId }),
-    BoardCollaborator.deleteMany({ board_id: boardId }),
+    Board.findByIdAndDelete(boardObjectId),
+    BoardElement.deleteMany({ board_id: boardObjectId }),
+    BoardCollaborator.deleteMany({ board_id: boardObjectId }),
   ]);
 
   res.json({ message: 'Board deleted successfully' });
@@ -211,8 +235,16 @@ router.post('/:id/collaborators', validate(schemas.addCollaborator), asyncHandle
   const userId = req.userId!;
   const { email, permission = 'view' } = req.body;
 
+  if (!boardId || !mongoose.Types.ObjectId.isValid(boardId)) {
+    res.status(400).json({ error: 'Invalid board ID', code: 'INVALID_BOARD_ID' });
+    return;
+  }
+
+  const boardObjectId = new mongoose.Types.ObjectId(boardId);
+  const userObjectId = new mongoose.Types.ObjectId(userId);
+
   // Check if user has permission to add collaborators
-  const board = await Board.findById(boardId);
+  const board = await Board.findById(boardObjectId);
   if (!board) {
     res.status(404).json({ error: 'Board not found', code: 'BOARD_NOT_FOUND' });
     return;
@@ -220,8 +252,8 @@ router.post('/:id/collaborators', validate(schemas.addCollaborator), asyncHandle
 
   const isOwner = board.owner_id.toString() === userId;
   const collaboration = await BoardCollaborator.findOne({
-    board_id: boardId,
-    user_id: userId,
+    board_id: boardObjectId,
+    user_id: userObjectId,
     permission: 'admin',
   });
 
@@ -239,7 +271,7 @@ router.post('/:id/collaborators', validate(schemas.addCollaborator), asyncHandle
 
   // Add collaborator
   await BoardCollaborator.findOneAndUpdate(
-    { board_id: boardId, user_id: collaboratorUser._id },
+    { board_id: boardObjectId, user_id: collaboratorUser._id },
     { permission },
     { upsert: true, new: true }
   );
@@ -253,8 +285,21 @@ router.delete('/:id/collaborators/:userId', asyncHandler(async (req: AuthRequest
   const userId = req.userId!;
   const collaboratorUserId = req.params.userId;
 
+  if (!boardId || !mongoose.Types.ObjectId.isValid(boardId)) {
+    res.status(400).json({ error: 'Invalid board ID', code: 'INVALID_BOARD_ID' });
+    return;
+  }
+
+  if (!collaboratorUserId || !mongoose.Types.ObjectId.isValid(collaboratorUserId)) {
+    res.status(400).json({ error: 'Invalid user ID', code: 'INVALID_USER_ID' });
+    return;
+  }
+
+  const boardObjectId = new mongoose.Types.ObjectId(boardId);
+  const collaboratorUserObjectId = new mongoose.Types.ObjectId(collaboratorUserId);
+
   // Check if user has permission
-  const board = await Board.findById(boardId);
+  const board = await Board.findById(boardObjectId);
   if (!board) {
     res.status(404).json({ error: 'Board not found', code: 'BOARD_NOT_FOUND' });
     return;
@@ -267,8 +312,8 @@ router.delete('/:id/collaborators/:userId', asyncHandler(async (req: AuthRequest
   }
 
   await BoardCollaborator.findOneAndDelete({
-    board_id: boardId,
-    user_id: collaboratorUserId,
+    board_id: boardObjectId,
+    user_id: collaboratorUserObjectId,
   });
 
   res.json({ message: 'Collaborator removed successfully' });
