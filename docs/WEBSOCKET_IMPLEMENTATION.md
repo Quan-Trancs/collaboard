@@ -4,11 +4,11 @@
 
 The project uses **WebSockets (Socket.IO)** for real-time collaboration with **MongoDB** for persistence. This architecture provides:
 
-- ⚡ **Low-latency real-time updates** (~10-50ms via WebSocket)
-- 💾 **Reliable persistence** (MongoDB database)
-- 🔐 **Secure authentication** (JWT)
-- 👥 **Live cursor tracking** (WebSocket)
-- ↩️ **Collaborative undo/redo** (WebSocket)
+- **Low-latency real-time updates** (~10-50ms via WebSocket)
+- **Reliable persistence** (MongoDB database)
+- **Secure authentication** (JWT)
+- **Live cursor tracking** (WebSocket)
+- **Collaborative undo/redo** (WebSocket)
 
 ## Architecture
 
