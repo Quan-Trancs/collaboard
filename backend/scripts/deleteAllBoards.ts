@@ -30,19 +30,19 @@ const deleteAllBoards = async () => {
     const elementCount = await BoardElement.countDocuments();
     const collaboratorCount = await BoardCollaborator.countDocuments();
 
-    console.log('\n📊 Current database state:');
+    console.log('\nCurrent database state:');
     console.log(`   Boards: ${boardCount}`);
     console.log(`   Elements: ${elementCount}`);
     console.log(`   Collaborators: ${collaboratorCount}`);
 
     if (boardCount === 0) {
-      console.log('\n✅ No boards to delete. Database is already empty.');
+      console.log('\n[SUCCESS] No boards to delete. Database is already empty.');
       await mongoose.connection.close();
       process.exit(0);
     }
 
     // Confirm deletion
-    console.log('\n⚠️  WARNING: This will delete ALL boards, elements, and collaborators!');
+    console.log('\n[WARNING] This will delete ALL boards, elements, and collaborators!');
     console.log('   This action cannot be undone.\n');
 
     // In a real script, you might want to add a confirmation prompt here
@@ -57,7 +57,7 @@ const deleteAllBoards = async () => {
       BoardCollaborator.deleteMany({}),
     ]);
 
-    console.log('\n✅ Deletion complete!');
+    console.log('\n[SUCCESS] Deletion complete!');
     console.log(`   Deleted ${deletedBoards.deletedCount} boards`);
     console.log(`   Deleted ${deletedElements.deletedCount} elements`);
     console.log(`   Deleted ${deletedCollaborators.deletedCount} collaborators`);
@@ -67,16 +67,16 @@ const deleteAllBoards = async () => {
     const remainingElements = await BoardElement.countDocuments();
     const remainingCollaborators = await BoardCollaborator.countDocuments();
 
-    console.log('\n📊 Database state after deletion:');
+    console.log('\nDatabase state after deletion:');
     console.log(`   Boards: ${remainingBoards}`);
     console.log(`   Elements: ${remainingElements}`);
     console.log(`   Collaborators: ${remainingCollaborators}`);
 
     await mongoose.connection.close();
-    console.log('\n✅ Disconnected from MongoDB');
+    console.log('\n[SUCCESS] Disconnected from MongoDB');
     process.exit(0);
   } catch (error) {
-    console.error('\n❌ Error deleting boards:', error);
+    console.error('\n[ERROR] Error deleting boards:', error);
     await mongoose.connection.close();
     process.exit(1);
   }

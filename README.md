@@ -4,34 +4,79 @@ A real-time collaborative whiteboard application built with React, TypeScript, a
 
 ## Features
 
-- 🎨 **Real-time Collaboration** - Draw, write, and collaborate in real-time with WebSocket support
-- 🔐 **Authentication** - User authentication (implement your own)
-- 📊 **Multiple Tools** - Pen, shapes, text, images, tables, charts, and more
-- 👥 **Team Collaboration** - Share boards with team members and manage permissions
-- 💾 **Auto-save** - Automatic saving of your work
-- 🎯 **Undo/Redo** - Full history support for collaborative editing
-- 📱 **Responsive Design** - Works on desktop and mobile devices
+### Real-time Collaboration
+- **Live Updates** - Real-time synchronization using WebSocket (Socket.IO)
+- **Live Cursor Tracking** - See where other collaborators are working
+- **Collaborative Editing** - Multiple users can edit simultaneously
+- **Instant Sync** - Changes appear instantly across all connected clients
+
+### Drawing & Editing Tools
+- **Pen Tool** - Freehand drawing with customizable colors and stroke widths
+- **Shapes** - Rectangle and circle tools with various styles
+- **Text Tool** - Add and edit text elements
+- **Images** - Upload and insert images
+- **Tables** - Insert customizable tables
+- **Charts** - Create various chart types
+- **Icons** - Add icons from Lucide icon library
+- **Eraser** - Remove parts of drawings
+- **Select Tool** - Move and manipulate elements
+
+### Collaboration Features
+- **Team Sharing** - Share boards with team members
+- **Permissions Management** - Control access and editing permissions
+- **User Presence** - See who's currently viewing/editing
+- **Conflict Resolution** - Smart handling of simultaneous edits
+
+### User Experience
+- **Auto-save** - Automatic saving of your work
+- **Undo/Redo** - Full history support for collaborative editing
+- **Responsive Design** - Works seamlessly on desktop and mobile devices
+- **Fast Loading** - Code splitting and lazy loading for optimal performance
+- **Error Handling** - Robust error handling with retry mechanisms
+- **Image Processing** - Optimized image uploads and processing
+- **Secure Authentication** - JWT-based authentication with password hashing
 
 ## Tech Stack
 
 ### Frontend
-- **React 18** with TypeScript
-- **Vite** for fast development and building
-- **Tailwind CSS** for styling
-- **Radix UI** (shadcn/ui) for accessible components
-- **Socket.IO Client** for real-time collaboration
-- **React Router** for navigation
+- **React 18** - Modern React with hooks and concurrent features
+- **TypeScript** - Type-safe development
+- **Vite** - Fast build tool and dev server
+- **Tailwind CSS** - Utility-first CSS framework
+- **Radix UI** (shadcn/ui) - Accessible component primitives
+- **Socket.IO Client** - Real-time bidirectional communication
+- **React Router v6** - Declarative routing
+- **React Hook Form** - Performant form management
+- **Zod** - Schema validation
+- **Framer Motion** - Animation library
+- **Lucide React** - Icon library
+- **Class Variance Authority** - Component variant management
 
 ### Backend
-- **Node.js** with Express
-- **Socket.IO** for WebSocket connections
-- **MongoDB** with Mongoose for database
-- **JWT** for authentication
-- **TypeScript** for type safety
-
-### Database
-- **MongoDB** - Flexible NoSQL database
+- **Node.js** - JavaScript runtime
+- **Express** - Web application framework
+- **TypeScript** - Type-safe backend development
+- **Socket.IO** - Real-time WebSocket communication
+- **MongoDB** - NoSQL database
 - **Mongoose** - MongoDB object modeling
+- **JWT (jsonwebtoken)** - Token-based authentication
+- **bcryptjs** - Password hashing
+- **Joi** - Schema validation
+- **Helmet** - Security middleware
+- **Express Rate Limit** - Rate limiting protection
+- **CORS** - Cross-origin resource sharing
+- **Morgan** - HTTP request logger
+- **Compression** - Response compression middleware
+
+### File Handling
+- **Multer** - File upload handling
+- **Sharp** - High-performance image processing
+
+### Development Tools
+- **ESLint** - Code linting
+- **Vitest** - Unit testing framework
+- **tsx** - TypeScript execution for Node.js
+- **Nodemon** - Development server auto-reload
 
 ## Getting Started
 

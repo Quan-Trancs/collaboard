@@ -73,8 +73,8 @@ const InsertPanel = ({ onInsert }: InsertPanelProps) => {
   ];
 
   const icons = [
-    "🚀", "💡", "⭐", "🎯", "📈", "💻", "🎨", "📱", "🌍", "⚡",
-    "🔧", "📊", "🎪", "🏆", "💎", "🎭", "🔮", "🌟", "🎨", "🎪"
+    "rocket", "lightbulb", "star", "target", "chart", "laptop", "palette", "phone", "globe", "zap",
+    "wrench", "bar-chart", "party", "trophy", "gem", "mask", "crystal", "sparkle", "brush", "tent"
   ];
 
   const handleImageUpload = (event: React.ChangeEvent<HTMLInputElement>) => {

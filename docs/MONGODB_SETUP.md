@@ -4,11 +4,11 @@ This project uses **MongoDB** with **Mongoose** as the database solution.
 
 ## Why MongoDB?
 
-- ✅ Flexible schemas (perfect for whiteboard elements with varying structures)
-- ✅ Easy to set up and use
-- ✅ Works great with Node.js/Express
-- ✅ Free tier available (MongoDB Atlas)
-- ✅ Good for nested/embedded data structures
+- Flexible schemas (perfect for whiteboard elements with varying structures)
+- Easy to set up and use
+- Works great with Node.js/Express
+- Free tier available (MongoDB Atlas)
+- Good for nested/embedded data structures
 
 ## Setup Options
 
@@ -90,7 +90,7 @@ MONGODB_URI=mongodb://localhost:27017/collaboard
 # MONGODB_URI=mongodb+srv://username:password@cluster.mongodb.net/collaboard
 
 # JWT Configuration
-JWT_SECRET=84d584e370ab739443f716d60a4528fcf788a54bebef40806f2f836061a25e54eaa9aaab328eb523944c6159ad44d0ff49b9a9d4757b7dfca204abfb900e31bf
+JWT_SECRET=your-secret-key-change-in-production
 JWT_EXPIRES_IN=7d
 
 # Server Configuration
@@ -117,7 +117,7 @@ The application uses the following collections:
 
 2. You should see:
    ```
-   ✅ MongoDB connected successfully
+   [SUCCESS] MongoDB connected successfully
       Database: collaboard
    ```
 

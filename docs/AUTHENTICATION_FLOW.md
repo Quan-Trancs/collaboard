@@ -286,8 +286,8 @@ Token Received
                     ├─→ VERIFY signature
                     │    - Re-sign header.payload with JWT_SECRET
                     │    - Compare new signature with token signature
-                    │    - If match: ✅ Signature valid
-                    │    - If no match: ❌ 401 "Invalid signature"
+                    │    - If match: Signature valid
+                    │    - If no match: 401 "Invalid signature"
                     │
                     ├─→ Signature valid? ──NO──→ 401 "Invalid signature"
                     │
@@ -301,7 +301,7 @@ Token Received
                               │
                               └─→ YES
                                    │
-                                   └─→ ✅ Request proceeds
+                                   └─→ Request proceeds
 ```
 
 ### How JWT Token Verification Works:
@@ -346,8 +346,8 @@ The backend verifies the signature by:
    - Signs it again with the current `JWT_SECRET`
    - Creates a new signature
 2. **Compares signatures**:
-   - If the new signature matches the token's signature → ✅ Valid
-   - If they don't match → ❌ Invalid (wrong secret or tampered token)
+   - If the new signature matches the token's signature → Valid
+   - If they don't match → Invalid (wrong secret or tampered token)
 3. **Why this works**:
    - If the token was signed with a different `JWT_SECRET`, the signatures won't match
    - If someone tampered with the payload, the signature won't match

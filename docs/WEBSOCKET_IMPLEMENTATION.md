@@ -33,7 +33,7 @@ The project uses **WebSockets (Socket.IO)** for real-time collaboration with **M
 
 ### Backend (`backend/src/index.ts`)
 
-✅ **Real-time collaboration handlers:**
+**Real-time collaboration handlers:**
 - `drawing-start` - New drawing elements
 - `drawing-update` - Element updates (pen strokes, shapes)
 - `element-delete` - Element deletion
@@ -41,7 +41,7 @@ The project uses **WebSockets (Socket.IO)** for real-time collaboration with **M
 - `undo` - Collaborative undo operations
 - `join-board` / `leave-board` - Board room management
 
-✅ **In-memory state management:**
+**In-memory state management:**
 - Board states stored in memory (fast access)
 - Action history for undo/redo
 - User presence tracking
@@ -49,12 +49,12 @@ The project uses **WebSockets (Socket.IO)** for real-time collaboration with **M
 
 ### Frontend
 
-✅ **New WebSocket Hook** (`src/hooks/useSocket.ts`):
+**New WebSocket Hook** (`src/hooks/useSocket.ts`):
 - Manages Socket.IO connection
 - Provides real-time event handlers
 - Handles reconnection automatically
 
-✅ **Updated Whiteboard Component**:
+**Updated Whiteboard Component**:
 - Real-time drawing via WebSocket
 - Cursor tracking (throttled to 100ms)
 - Collaborative undo/redo
