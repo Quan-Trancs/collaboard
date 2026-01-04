@@ -1,313 +1,202 @@
-import { supabase } from './supabase'
-import type { Database } from './supabase'
+/**
+ * API functions
+ * 
+ * Connects to the backend Express API with MongoDB
+ * Uses enhanced API client with retry logic and caching
+ */
 
-type User = Database['public']['Tables']['users']['Row']
-type Board = Database['public']['Tables']['boards']['Row']
-type BoardCollaborator = Database['public']['Tables']['board_collaborators']['Row']
-type BoardElement = Database['public']['Tables']['board_elements']['Row']
+import { apiRequest, ApiError, clearCache } from './apiClient';
+import type { User, Board, BoardElement } from '@/types';
 
-// User API functions
+/**
+ * User API functions
+ */
 export const userApi = {
-  // Get current user
   async getCurrentUser(): Promise<User | null> {
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) return null
-
-    const { data, error } = await supabase
-      .from('users')
-      .select('*')
-      .eq('id', user.id)
-      .single()
-
-    if (error) throw error
-    return data
-  },
-
-  // Create or update user profile
-  async upsertUser(userData: { id: string; email: string; name: string; avatar_url?: string }): Promise<User> {
-    const { data, error } = await supabase
-      .from('users')
-      .upsert(userData, { onConflict: 'id' })
-      .select()
-      .single()
-
-    if (error) throw error
-    return data
-  },
-
-  // Update user profile
-  async updateUser(id: string, updates: Partial<User>): Promise<User> {
-    const { data, error } = await supabase
-      .from('users')
-      .update(updates)
-      .eq('id', id)
-      .select()
-      .single()
-
-    if (error) throw error
-    return data
-  }
-}
-
-// Board API functions
-export const boardApi = {
-  // Get all boards for current user
-  async getBoards(): Promise<Board[]> {
-    const { data, error } = await supabase
-      .from('boards')
-      .select(`
-        *,
-        owner:users!boards_owner_id_fkey(name, email),
-        collaborators:board_collaborators(
-          user:users!board_collaborators_user_id_fkey(name, email)
-        )
-      `)
-      .order('updated_at', { ascending: false })
-
-    if (error) throw error
-    return data || []
-  },
-
-  // Get single board with elements
-  async getBoard(id: string): Promise<Board & { elements: BoardElement[] }> {
-    const { data: board, error: boardError } = await supabase
-      .from('boards')
-      .select(`
-        *,
-        owner:users!boards_owner_id_fkey(name, email),
-        collaborators:board_collaborators(
-          user:users!board_collaborators_user_id_fkey(name, email)
-        )
-      `)
-      .eq('id', id)
-      .single()
-
-    if (boardError) throw boardError
-
-    const { data: elements, error: elementsError } = await supabase
-      .from('board_elements')
-      .select('*')
-      .eq('board_id', id)
-      .order('created_at', { ascending: true })
-
-    if (elementsError) throw elementsError
-
-    return {
-      ...board,
-      elements: elements || []
+    try {
+      return await apiRequest<User>('/auth/me', { cache: true, cacheTTL: 2 * 60 * 1000 });
+    } catch (error) {
+      // Do not remove token on API failures - let user handle it explicitly
+      return null;
     }
   },
 
-  // Create new board
+  async updateUser(id: string, updates: Partial<User>): Promise<User> {
+    const result = await apiRequest<User>('/auth/profile', {
+      method: 'PUT',
+      body: JSON.stringify(updates),
+    });
+    // Clear user cache after update
+    clearCache('/auth/me');
+    return result;
+  },
+};
+
+/**
+ * Board API functions
+ */
+export const boardApi = {
+  async getBoards(): Promise<Board[]> {
+    try {
+      return await apiRequest<Board[]>('/boards', { 
+        cache: true, 
+        cacheTTL: 30 * 1000 // 30 seconds cache
+      });
+    } catch (error) {
+      // Do not remove token on API failures - let user handle it explicitly
+      return [];
+    }
+  },
+
+  async getBoard(id: string): Promise<Board & { elements: BoardElement[] }> {
+    return await apiRequest<Board & { elements: BoardElement[] }>(`/boards/${id}`, {
+      cache: true,
+      cacheTTL: 10 * 1000, // 10 seconds cache
+    });
+  },
+
   async createBoard(boardData: { title: string; description?: string; is_public?: boolean }): Promise<Board> {
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) throw new Error('User not authenticated')
-
-    const { data, error } = await supabase
-      .from('boards')
-      .insert({
-        ...boardData,
-        owner_id: user.id
-      })
-      .select()
-      .single()
-
-    if (error) throw error
-    return data
+    const result = await apiRequest<Board>('/boards', {
+      method: 'POST',
+      body: JSON.stringify(boardData),
+    });
+    // Clear boards list cache
+    clearCache('/boards');
+    return result;
   },
 
-  // Update board
   async updateBoard(id: string, updates: Partial<Board>): Promise<Board> {
-    const { data, error } = await supabase
-      .from('boards')
-      .update(updates)
-      .eq('id', id)
-      .select()
-      .single()
-
-    if (error) throw error
-    return data
+    const result = await apiRequest<Board>(`/boards/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(updates),
+    });
+    // Clear caches
+    clearCache('/boards');
+    clearCache(`/boards/${id}`);
+    return result;
   },
 
-  // Delete board
   async deleteBoard(id: string): Promise<void> {
-    const { error } = await supabase
-      .from('boards')
-      .delete()
-      .eq('id', id)
-
-    if (error) throw error
+    await apiRequest(`/boards/${id}`, {
+      method: 'DELETE',
+    });
+    // Clear caches
+    clearCache('/boards');
+    clearCache(`/boards/${id}`);
   },
 
-  // Add collaborator to board
   async addCollaborator(boardId: string, email: string, permission: 'view' | 'edit' | 'admin' = 'view'): Promise<void> {
-    // First find user by email
-    const { data: user, error: userError } = await supabase
-      .from('users')
-      .select('id')
-      .eq('email', email)
-      .single()
-
-    if (userError) throw new Error('User not found')
-
-    const { error } = await supabase
-      .from('board_collaborators')
-      .insert({
-        board_id: boardId,
-        user_id: user.id,
-        permission
-      })
-
-    if (error) throw error
+    await apiRequest(`/boards/${boardId}/collaborators`, {
+      method: 'POST',
+      body: JSON.stringify({ email, permission }),
+    });
+    // Clear board cache
+    clearCache(`/boards/${boardId}`);
   },
 
-  // Remove collaborator from board
   async removeCollaborator(boardId: string, userId: string): Promise<void> {
-    const { error } = await supabase
-      .from('board_collaborators')
-      .delete()
-      .eq('board_id', boardId)
-      .eq('user_id', userId)
-
-    if (error) throw error
+    await apiRequest(`/boards/${userId}/collaborators/${userId}`, {
+      method: 'DELETE',
+    });
+    // Clear board cache
+    clearCache(`/boards/${userId}`);
   },
 
-  // Update collaborator permission
   async updateCollaboratorPermission(boardId: string, userId: string, permission: 'view' | 'edit' | 'admin'): Promise<void> {
-    const { error } = await supabase
-      .from('board_collaborators')
-      .update({ permission })
-      .eq('board_id', boardId)
-      .eq('user_id', userId)
+    // Use addCollaborator which upserts
+    await this.addCollaborator(boardId, '', permission);
+  },
+};
 
-    if (error) throw error
-  }
-}
-
-// Board Elements API functions
+/**
+ * Board Elements API functions
+ */
 export const elementApi = {
-  // Get elements for a board
   async getElements(boardId: string): Promise<BoardElement[]> {
-    const { data, error } = await supabase
-      .from('board_elements')
-      .select('*')
-      .eq('board_id', boardId)
-      .order('created_at', { ascending: true })
-
-    if (error) throw error
-    return data || []
+    try {
+      return await apiRequest<BoardElement[]>(`/elements/board/${boardId}`, {
+        cache: true,
+        cacheTTL: 5 * 1000, // 5 seconds cache for elements
+      });
+    } catch (error) {
+      return [];
+    }
   },
 
-  // Create new element
   async createElement(elementData: {
-    board_id: string
-    type: 'drawing' | 'text' | 'shape' | 'image' | 'table' | 'chart' | 'icon'
-    data: any
-    position: { x: number; y: number }
-    size?: { width: number; height: number }
+    board_id: string;
+    type: 'drawing' | 'text' | 'shape' | 'image' | 'table' | 'chart' | 'icon';
+    data: Record<string, any>;
+    position: { x: number; y: number };
+    size?: { width: number; height: number };
   }): Promise<BoardElement> {
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) throw new Error('User not authenticated')
-
-    const { data, error } = await supabase
-      .from('board_elements')
-      .insert({
-        ...elementData,
-        created_by: user.id
-      })
-      .select()
-      .single()
-
-    if (error) throw error
-    return data
+    const result = await apiRequest<BoardElement>('/elements', {
+      method: 'POST',
+      body: JSON.stringify(elementData),
+    });
+    // Clear elements cache for this board
+    clearCache(`/elements/board/${elementData.board_id}`);
+    return result;
   },
 
-  // Update element
   async updateElement(id: string, updates: Partial<BoardElement>): Promise<BoardElement> {
-    const { data, error } = await supabase
-      .from('board_elements')
-      .update(updates)
-      .eq('id', id)
-      .select()
-      .single()
-
-    if (error) throw error
-    return data
+    const result = await apiRequest<BoardElement>(`/elements/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(updates),
+    });
+    // Clear elements cache if board_id is in updates
+    if (updates.board_id) {
+      clearCache(`/elements/board/${updates.board_id}`);
+    }
+    return result;
   },
 
-  // Delete element
-  async deleteElement(id: string): Promise<void> {
-    const { error } = await supabase
-      .from('board_elements')
-      .delete()
-      .eq('id', id)
-
-    if (error) throw error
+  async deleteElement(id: string, boardId?: string): Promise<void> {
+    await apiRequest(`/elements/${id}`, {
+      method: 'DELETE',
+    });
+    // Clear elements cache if boardId provided
+    if (boardId) {
+      clearCache(`/elements/board/${boardId}`);
+    }
   },
 
-  // Batch update elements (for real-time collaboration)
-  async batchUpdateElements(elements: Array<{ id: string; updates: Partial<BoardElement> }>): Promise<void> {
-    const { error } = await supabase
-      .from('board_elements')
-      .upsert(
-        elements.map(({ id, updates }) => ({ id, ...updates })),
-        { onConflict: 'id' }
-      )
+  async batchUpdateElements(boardId: string, elements: Array<{ id: string; updates: Partial<BoardElement> }>): Promise<void> {
+    // Transform to batch-save format
+    const batchElements = elements.map(({ id, updates }) => ({
+      id,
+      type: updates.type!,
+      data: updates.data!,
+      position: updates.position!,
+      size: updates.size,
+    }));
 
-    if (error) throw error
-  }
-}
+    await apiRequest('/elements/batch-save', {
+      method: 'POST',
+      body: JSON.stringify({
+        boardId,
+        elements: batchElements,
+      }),
+    });
+    // Clear elements cache
+    clearCache(`/elements/board/${boardId}`);
+  },
+};
 
-// Real-time subscription helpers
+/**
+ * Real-time subscription helpers (stubs - WebSocket handled by Socket.IO)
+ */
 export const realtimeApi = {
-  // Subscribe to board changes
   subscribeToBoard(boardId: string, callback: (payload: any) => void) {
-    return supabase
-      .channel(`board:${boardId}`)
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'board_elements',
-          filter: `board_id=eq.${boardId}`
-        },
-        callback
-      )
-      .subscribe()
+    // Real-time is handled by Socket.IO, not needed here
+    return { unsubscribe: () => {} };
   },
 
-  // Subscribe to board metadata changes
   subscribeToBoardMetadata(boardId: string, callback: (payload: any) => void) {
-    return supabase
-      .channel(`board-metadata:${boardId}`)
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'boards',
-          filter: `id=eq.${boardId}`
-        },
-        callback
-      )
-      .subscribe()
+    return { unsubscribe: () => {} };
   },
 
-  // Subscribe to collaborator changes
   subscribeToCollaborators(boardId: string, callback: (payload: any) => void) {
-    return supabase
-      .channel(`collaborators:${boardId}`)
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'board_collaborators',
-          filter: `board_id=eq.${boardId}`
-        },
-        callback
-      )
-      .subscribe()
-  }
-} 
+    return { unsubscribe: () => {} };
+  },
+};

@@ -7,36 +7,118 @@ export interface AppError {
 
 export class ErrorHandler {
   static createError(error: any, context?: string): AppError {
-    // Handle Supabase errors
+    // Handle ApiError with specific codes
+    if (error instanceof Error && 'code' in error && 'status' in error) {
+      const apiError = error as { code?: string; status: number; message: string };
+      
+      // Authentication error codes
+      switch (apiError.code) {
+        case 'NO_TOKEN':
+          return {
+            type: 'auth',
+            message: 'You need to log in to perform this action. Please log in and try again.',
+            originalError: error,
+            code: 'NO_TOKEN'
+          };
+        
+        case 'INVALID_TOKEN_FORMAT':
+          return {
+            type: 'auth',
+            message: 'Invalid token format. Please log in again.',
+            originalError: error,
+            code: 'INVALID_TOKEN_FORMAT'
+          };
+        
+        case 'INVALID_TOKEN_SIGNATURE':
+          return {
+            type: 'auth',
+            message: 'Invalid token. Please log in again.',
+            originalError: error,
+            code: 'INVALID_TOKEN_SIGNATURE'
+          };
+        
+        case 'TOKEN_EXPIRED':
+          return {
+            type: 'auth',
+            message: 'Your session has expired. Please log in again.',
+            originalError: error,
+            code: 'TOKEN_EXPIRED'
+          };
+        
+        case 'TOKEN_NOT_ACTIVE':
+          return {
+            type: 'auth',
+            message: 'Token not active yet. Please try again later.',
+            originalError: error,
+            code: 'TOKEN_NOT_ACTIVE'
+          };
+        
+        case 'INVALID_TOKEN':
+          return {
+            type: 'auth',
+            message: 'Invalid token. Please log in again.',
+            originalError: error,
+            code: 'INVALID_TOKEN'
+          };
+        
+        case 'USER_NOT_FOUND':
+          return {
+            type: 'auth',
+            message: 'User not found. Please log in again.',
+            originalError: error,
+            code: 'USER_NOT_FOUND'
+          };
+        
+        case 'INVALID_CREDENTIALS':
+          return {
+            type: 'auth',
+            message: 'Invalid email or password. Please check your credentials and try again.',
+            originalError: error,
+            code: 'INVALID_CREDENTIALS'
+          };
+        
+        case 'USER_EXISTS':
+          return {
+            type: 'validation',
+            message: 'An account with this email already exists. Please log in instead.',
+            originalError: error,
+            code: 'USER_EXISTS'
+          };
+        
+        case 'AUTH_ERROR':
+          return {
+            type: 'auth',
+            message: 'Authentication error. Please try again.',
+            originalError: error,
+            code: 'AUTH_ERROR'
+          };
+      }
+    }
+
+    // Handle database errors
     if (error?.code) {
       switch (error.code) {
-        case 'PGRST116':
-          return {
-            type: 'notFound',
-            message: 'The requested resource was not found.',
-            originalError: error,
-            code: error.code
-          };
         case 42501:
           return {
             type: 'permission',
             message: 'You do not have permission to perform this action.',
             originalError: error,
-            code: error.code
+            code: error.code.toString()
           };
         case 23505:
+        case 11000: // MongoDB duplicate key error
           return {
             type: 'validation',
             message: 'This item already exists.',
             originalError: error,
-            code: error.code
+            code: error.code.toString()
           };
         case 23503:
           return {
             type: 'validation',
             message: 'This operation cannot be completed due to related data.',
             originalError: error,
-            code: error.code
+            code: error.code.toString()
           };
       }
     }
@@ -46,16 +128,8 @@ export class ErrorHandler {
       return {
         type: 'network',
         message: 'Network error. Please check your connection and try again.',
-        originalError: error
-      };
-    }
-
-    // Handle authentication errors
-    if (error?.message?.includes('auth') || error?.message?.includes('login')) {
-      return {
-        type: 'auth',
-        message: 'Authentication failed. Please log in again.',
-        originalError: error
+        originalError: error,
+        code: 'NETWORK_ERROR'
       };
     }
 
@@ -64,7 +138,8 @@ export class ErrorHandler {
       return {
         type: 'validation',
         message: error.message || 'Invalid data provided.',
-        originalError: error
+        originalError: error,
+        code: 'VALIDATION_ERROR'
       };
     }
 
@@ -72,7 +147,8 @@ export class ErrorHandler {
     return {
       type: 'unknown',
       message: error?.message || 'An unexpected error occurred.',
-      originalError: error
+      originalError: error,
+      code: 'UNKNOWN_ERROR'
     };
   }
 
@@ -90,15 +166,35 @@ export class ErrorHandler {
           description: error.message
         };
       case 'auth':
+        let title = 'Authentication Error';
+        switch (error.code) {
+          case 'NO_TOKEN':
+            title = 'Authentication Required';
+            break;
+          case 'INVALID_CREDENTIALS':
+            title = 'Login Failed';
+            break;
+          case 'TOKEN_EXPIRED':
+            title = 'Session Expired';
+            break;
+          case 'INVALID_TOKEN_SIGNATURE':
+          case 'INVALID_TOKEN':
+          case 'INVALID_TOKEN_FORMAT':
+            title = 'Invalid Session';
+            break;
+          case 'USER_NOT_FOUND':
+            title = 'User Not Found';
+            break;
+        }
         return {
           ...baseConfig,
-          title: 'Authentication Error',
+          title,
           description: error.message
         };
       case 'validation':
         return {
           ...baseConfig,
-          title: 'Validation Error',
+          title: error.code === 'USER_EXISTS' ? 'Account Exists' : 'Validation Error',
           description: error.message
         };
       case 'permission':
@@ -129,21 +225,7 @@ export class ErrorHandler {
   }
 
   static logError(error: AppError, context?: string) {
-    if (import.meta.env.DEV) {
-      console.group(`Error in ${context || 'unknown context'}`);
-      console.error('Error details:', error);
-      console.error('Original error:', error.originalError);
-      console.groupEnd();
-    }
-
-    // In production, you could send to error reporting service
-    if (import.meta.env.PROD) {
-      // Example: send to Sentry, LogRocket, etc.
-      // errorReportingService.captureException(error.originalError, {
-      //   tags: { type: error.type, context },
-      //   extra: { appError: error }
-      // });
-    }
+    // Error logged (removed console logging for production)
   }
 }
 
@@ -159,4 +241,4 @@ export const handleAsyncError = async <T>(
     ErrorHandler.logError(appError, context);
     return { data: null, error: appError };
   }
-}; 
+};

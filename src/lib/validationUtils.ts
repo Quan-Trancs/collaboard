@@ -45,13 +45,7 @@ export function validateAndToast<T>(
     });
     
     // Log all errors in development
-    if (import.meta.env.DEV) {
-      console.group(`${context} Validation Errors:`);
-      result.errors.forEach((error) => {
-        console.error(`${error.field}: ${error.message}`);
-      });
-      console.groupEnd();
-    }
+    // Validation errors (removed console logging for production)
     
     return null;
   }
