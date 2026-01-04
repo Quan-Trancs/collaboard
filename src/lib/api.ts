@@ -14,7 +14,7 @@ import type { User, Board, BoardElement } from '@/types';
 export const userApi = {
   async getCurrentUser(): Promise<User | null> {
     try {
-      return await apiRequest<User>('/auth/me', { cache: true, cacheTTL: 2 * 60 * 1000 });
+      return await apiRequest<User>('/auth/me', { useCache: true, cacheTTL: 2 * 60 * 1000 });
     } catch (error) {
       // Do not remove token on API failures - let user handle it explicitly
       return null;
@@ -39,7 +39,7 @@ export const boardApi = {
   async getBoards(): Promise<Board[]> {
     try {
       return await apiRequest<Board[]>('/boards', { 
-        cache: true, 
+        useCache: true, 
         cacheTTL: 30 * 1000 // 30 seconds cache
       });
     } catch (error) {
@@ -50,7 +50,7 @@ export const boardApi = {
 
   async getBoard(id: string): Promise<Board & { elements: BoardElement[] }> {
     return await apiRequest<Board & { elements: BoardElement[] }>(`/boards/${id}`, {
-      cache: true,
+      useCache: true,
       cacheTTL: 10 * 1000, // 10 seconds cache
     });
   },
@@ -115,7 +115,7 @@ export const elementApi = {
   async getElements(boardId: string): Promise<BoardElement[]> {
     try {
       return await apiRequest<BoardElement[]>(`/elements/board/${boardId}`, {
-        cache: true,
+        useCache: true,
         cacheTTL: 5 * 1000, // 5 seconds cache for elements
       });
     } catch (error) {

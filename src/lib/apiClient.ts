@@ -18,10 +18,10 @@ export class ApiError extends Error {
   }
 }
 
-interface RequestOptions extends RequestInit {
+interface RequestOptions extends Omit<RequestInit, 'cache'> {
   retries?: number;
   skipAuth?: boolean;
-  cache?: boolean;
+  useCache?: boolean; // Custom cache flag (different from native RequestInit.cache)
   cacheTTL?: number; // Time to live in milliseconds
 }
 
@@ -67,7 +67,7 @@ export const apiRequest = async <T>(
   const {
     retries = MAX_RETRIES,
     skipAuth = false,
-    cache: useCache = false,
+    useCache = false,
     cacheTTL = 5 * 60 * 1000, // 5 minutes default
     ...fetchOptions
   } = options;
@@ -82,9 +82,9 @@ export const apiRequest = async <T>(
   }
 
   const token = skipAuth ? null : getAuthToken();
-  const headers: HeadersInit = {
+  const headers: Record<string, string> = {
     'Content-Type': 'application/json',
-    ...fetchOptions.headers,
+    ...(fetchOptions.headers as Record<string, string>),
   };
 
   // Add Authorization header if token exists and auth is not skipped

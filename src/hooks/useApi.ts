@@ -16,7 +16,7 @@ export const useApi = <T = any>(options: UseApiOptions = {}) => {
   const [data, setData] = useState<T | null>(null);
 
   const execute = useCallback(
-    async (endpoint: string, requestOptions: RequestInit = {}) => {
+    async (endpoint: string, requestOptions: Parameters<typeof apiRequest<T>>[1] = {}) => {
       setLoading(true);
       setError(null);
 

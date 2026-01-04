@@ -1,4 +1,5 @@
 import express, { Response } from 'express';
+import mongoose from 'mongoose';
 import { BoardElement } from '../models/BoardElement.js';
 import { Board } from '../models/Board.js';
 import { BoardCollaborator } from '../models/BoardCollaborator.js';
@@ -16,8 +17,16 @@ router.get('/board/:boardId', asyncHandler(async (req: AuthRequest, res: Respons
   const boardId = req.params.boardId;
   const userId = req.userId!;
 
+  if (!boardId || !mongoose.Types.ObjectId.isValid(boardId)) {
+    res.status(400).json({ error: 'Invalid board ID', code: 'INVALID_BOARD_ID' });
+    return;
+  }
+
+  const boardObjectId = new mongoose.Types.ObjectId(boardId);
+  const userObjectId = new mongoose.Types.ObjectId(userId);
+
   // Check if user has access
-  const board = await Board.findById(boardId).lean();
+  const board = await Board.findById(boardObjectId).lean();
   if (!board) {
     res.status(404).json({ error: 'Board not found', code: 'BOARD_NOT_FOUND' });
     return;
@@ -25,8 +34,8 @@ router.get('/board/:boardId', asyncHandler(async (req: AuthRequest, res: Respons
 
   const isOwner = board.owner_id.toString() === userId;
   const collaboration = await BoardCollaborator.findOne({
-    board_id: boardId,
-    user_id: userId,
+    board_id: boardObjectId,
+    user_id: userObjectId,
   }).lean();
 
   if (!isOwner && !collaboration && !board.is_public) {
@@ -34,7 +43,7 @@ router.get('/board/:boardId', asyncHandler(async (req: AuthRequest, res: Respons
     return;
   }
 
-  const elements = await BoardElement.find({ board_id: boardId })
+  const elements = await BoardElement.find({ board_id: boardObjectId })
     .sort({ createdAt: 1 })
     .lean()
     .limit(1000);
@@ -59,8 +68,16 @@ router.post('/', validate(schemas.createElement), asyncHandler(async (req: AuthR
   const { board_id, type, data, position, size } = req.body;
   const userId = req.userId!;
 
+  if (!board_id || !mongoose.Types.ObjectId.isValid(board_id)) {
+    res.status(400).json({ error: 'Invalid board ID', code: 'INVALID_BOARD_ID' });
+    return;
+  }
+
+  const boardObjectId = new mongoose.Types.ObjectId(board_id);
+  const userObjectId = new mongoose.Types.ObjectId(userId);
+
   // Check if user has edit access
-  const board = await Board.findById(board_id);
+  const board = await Board.findById(boardObjectId);
   if (!board) {
     res.status(404).json({ error: 'Board not found', code: 'BOARD_NOT_FOUND' });
     return;
@@ -68,8 +85,8 @@ router.post('/', validate(schemas.createElement), asyncHandler(async (req: AuthR
 
   const isOwner = board.owner_id.toString() === userId;
   const collaboration = await BoardCollaborator.findOne({
-    board_id,
-    user_id: userId,
+    board_id: boardObjectId,
+    user_id: userObjectId,
     permission: { $in: ['edit', 'admin'] },
   });
 
@@ -79,12 +96,12 @@ router.post('/', validate(schemas.createElement), asyncHandler(async (req: AuthR
   }
 
   const element = await BoardElement.create({
-    board_id,
+    board_id: boardObjectId,
     type,
     data,
     position,
     size,
-    created_by: userId,
+    created_by: userObjectId,
   });
 
   res.status(201).json({
@@ -105,8 +122,16 @@ router.post('/batch-save', validate(schemas.batchSaveElements), asyncHandler(asy
   const { boardId, elements } = req.body;
   const userId = req.userId!;
 
+  if (!boardId || !mongoose.Types.ObjectId.isValid(boardId)) {
+    res.status(400).json({ error: 'Invalid board ID', code: 'INVALID_BOARD_ID' });
+    return;
+  }
+
+  const boardObjectId = new mongoose.Types.ObjectId(boardId);
+  const userObjectId = new mongoose.Types.ObjectId(userId);
+
   // Check if user has edit access
-  const board = await Board.findById(boardId);
+  const board = await Board.findById(boardObjectId);
   if (!board) {
     res.status(404).json({ error: 'Board not found', code: 'BOARD_NOT_FOUND' });
     return;
@@ -114,8 +139,8 @@ router.post('/batch-save', validate(schemas.batchSaveElements), asyncHandler(asy
 
   const isOwner = board.owner_id.toString() === userId;
   const collaboration = await BoardCollaborator.findOne({
-    board_id: boardId,
-    user_id: userId,
+    board_id: boardObjectId,
+    user_id: userObjectId,
     permission: { $in: ['edit', 'admin'] },
   });
 
@@ -127,20 +152,24 @@ router.post('/batch-save', validate(schemas.batchSaveElements), asyncHandler(asy
     // Batch upsert elements
     const operations = elements.map((el: any) => {
       const updateDoc: any = {
-        board_id: boardId,
+        board_id: boardObjectId,
         type: el.type,
         data: el.data,
         position: el.position,
-        created_by: userId,
+        created_by: userObjectId,
       };
       
       if (el.size) {
         updateDoc.size = el.size;
       }
 
+      const elementId = el.id && mongoose.Types.ObjectId.isValid(el.id) 
+        ? new mongoose.Types.ObjectId(el.id)
+        : new mongoose.Types.ObjectId();
+
       return {
         updateOne: {
-          filter: { _id: el.id },
+          filter: { _id: elementId },
           update: { $set: updateDoc },
           upsert: true,
         },
@@ -171,10 +200,13 @@ router.put('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
     return;
   }
 
+  const boardObjectId = new mongoose.Types.ObjectId(element.board_id);
+  const userObjectId = new mongoose.Types.ObjectId(userId);
+
   const isOwner = board.owner_id.toString() === userId;
   const collaboration = await BoardCollaborator.findOne({
-    board_id: element.board_id.toString(),
-    user_id: userId,
+    board_id: boardObjectId,
+    user_id: userObjectId,
     permission: { $in: ['edit', 'admin'] },
   });
 
@@ -224,10 +256,13 @@ router.delete('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
     return;
   }
 
+  const boardObjectId = new mongoose.Types.ObjectId(element.board_id);
+  const userObjectId = new mongoose.Types.ObjectId(userId);
+
   const isOwner = board.owner_id.toString() === userId;
   const collaboration = await BoardCollaborator.findOne({
-    board_id: element.board_id.toString(),
-    user_id: userId,
+    board_id: boardObjectId,
+    user_id: userObjectId,
     permission: { $in: ['edit', 'admin'] },
   });
 

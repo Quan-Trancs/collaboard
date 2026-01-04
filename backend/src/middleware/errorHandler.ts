@@ -16,7 +16,7 @@ export const errorHandler = (
   req: Request,
   res: Response,
   next: NextFunction
-) => {
+): void => {
   let statusCode = err.statusCode || 500;
   let message = err.message || 'Internal server error';
   let code = err.code;
@@ -26,11 +26,12 @@ export const errorHandler = (
     statusCode = 400;
     message = 'Validation error';
     const errors = Object.values(err.errors).map(e => e.message);
-    return res.status(statusCode).json({
+    res.status(statusCode).json({
       error: message,
       details: errors,
       code: 'VALIDATION_ERROR',
     });
+    return;
   }
 
   // Mongoose cast error (invalid ObjectId)

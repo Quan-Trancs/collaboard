@@ -52,7 +52,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
 
       try {
         const userData = await apiRequest<User>('/auth/me', { 
-          cache: true, 
+          useCache: true, 
           cacheTTL: 2 * 60 * 1000 
         });
         const userWithMetadata: User = {
