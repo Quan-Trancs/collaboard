@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
   Dialog,
   DialogContent,
@@ -15,7 +15,6 @@ import { Separator } from "@/components/ui/separator";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Copy, Mail, Check } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
-import { useEffect } from "react";
 import { boardApi } from "@/lib/api";
 import { ErrorHandler } from "@/lib/errorHandler";
 import { useToast } from "@/components/ui/use-toast";
@@ -48,7 +47,7 @@ const ShareModal = ({
   const [email, setEmail] = useState("");
   const [copied, setCopied] = useState(false);
   const [collaborators, setCollaborators] = useState<Collaborator[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false); // Start as false, only set to true when fetching
   const [error, setError] = useState<string | null>(null);
   const [inviteError, setInviteError] = useState<string | null>(null);
   const [updatePermissionError, setUpdatePermissionError] = useState<string | null>(null);
@@ -56,9 +55,11 @@ const ShareModal = ({
   const { toast } = useToast();
   const [selectedCollaboratorId, setSelectedCollaboratorId] = useState<string | null>(null);
   const [selectedPermission, setSelectedPermission] = useState<"view" | "edit" | null>(null);
+  const fetchingRef = useRef<boolean>(false);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
-  // Helper to map Supabase collaborator to Collaborator
-  function mapSupabaseCollaborator(c: any): Collaborator {
+  // Helper to map database collaborator to Collaborator
+  function mapDatabaseCollaborator(c: any): Collaborator {
     return {
       id: c.user?.id || c.id || "",
       name: c.user?.name || c.name || "Unknown",
@@ -67,33 +68,81 @@ const ShareModal = ({
       permission: c.permission === "edit" ? "edit" : "view",
     };
   }
-  // Fetch collaborators on mount/boardId change
+  
+  // Fetch collaborators on mount/boardId change, but only when modal is open
   useEffect(() => {
+    // If modal is closed, reset loading state
+    if (!open) {
+      setLoading(false);
+      return;
+    }
+    
+    // Only fetch when modal is open and boardId exists
+    if (!boardId) {
+      setLoading(false);
+      return;
+    }
+    
+    // Prevent concurrent fetches
+    if (fetchingRef.current) return;
+    
+    // Cancel any in-flight requests
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    
+    const abortController = new AbortController();
+    abortControllerRef.current = abortController;
+    fetchingRef.current = true;
+    
     const fetchCollaborators = async () => {
       setLoading(true);
       try {
         const board = await boardApi.getBoard(boardId);
+        
+        // If request was aborted, don't process
+        if (abortController.signal.aborted) {
+          setLoading(false);
+          return;
+        }
+        
         const collaboratorsArray = (board && Array.isArray((board as any).collaborators)) ? (board as any).collaborators : [];
-        setCollaborators(collaboratorsArray.map(mapSupabaseCollaborator));
+        setCollaborators(collaboratorsArray.map(mapDatabaseCollaborator));
         setError(null);
-      } catch (error) {
+      } catch (error: any) {
+        // Don't show error if request was aborted
+        if (abortController.signal.aborted || error?.name === 'AbortError') {
+          setLoading(false);
+          return;
+        }
+        
         const appError = ErrorHandler.createError(error, "Fetching collaborators");
         ErrorHandler.logError(appError, "Fetching collaborators");
         toast(ErrorHandler.getToastConfig(appError));
         setError(appError.message);
       } finally {
-        setLoading(false);
+        if (!abortController.signal.aborted) {
+          setLoading(false);
+        }
+        fetchingRef.current = false;
       }
     };
-    if (boardId) fetchCollaborators();
-  }, [boardId, toast]);
+    
+    fetchCollaborators();
+    
+    // Cleanup function
+    return () => {
+      abortController.abort();
+      fetchingRef.current = false;
+      setLoading(false);
+    };
+  }, [boardId, open, toast]);
 
   const shareLink = `https://example.com/board/${boardId}?access=${permission}`;
 
   const handleCopyLink = () => {
     navigator.clipboard.writeText(shareLink);
     setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
   };
 
   // Invite collaborator
@@ -120,7 +169,7 @@ const ShareModal = ({
         // Refetch collaborators
         const board = await boardApi.getBoard(boardId);
         const collaboratorsArray = (board && Array.isArray((board as any).collaborators)) ? (board as any).collaborators : [];
-        setCollaborators(collaboratorsArray.map(mapSupabaseCollaborator));
+        setCollaborators(collaboratorsArray.map(mapDatabaseCollaborator));
         setEmail("");
         
         toast({
@@ -152,7 +201,7 @@ const ShareModal = ({
         // Refetch collaborators
         const board = await boardApi.getBoard(boardId);
         const collaboratorsArray = (board && Array.isArray((board as any).collaborators)) ? (board as any).collaborators : [];
-        setCollaborators(collaboratorsArray.map(mapSupabaseCollaborator));
+        setCollaborators(collaboratorsArray.map(mapDatabaseCollaborator));
         
         toast({
           title: "Permission updated",
@@ -180,7 +229,7 @@ const ShareModal = ({
         // Refetch collaborators
         const board = await boardApi.getBoard(boardId);
         const collaboratorsArray = (board && Array.isArray((board as any).collaborators)) ? (board as any).collaborators : [];
-        setCollaborators(collaboratorsArray.map(mapSupabaseCollaborator));
+        setCollaborators(collaboratorsArray.map(mapDatabaseCollaborator));
         
         toast({
           title: "Collaborator removed",

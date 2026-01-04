@@ -133,7 +133,6 @@ const InsertPanel = ({ onInsert }: InsertPanelProps) => {
         };
         img.src = imageData;
       } catch (error) {
-        console.error('Error processing image:', error);
         alert('Error processing image. Please try again.');
         setIsUploading(false);
       }
@@ -147,7 +146,6 @@ const InsertPanel = ({ onInsert }: InsertPanelProps) => {
     try {
       reader.readAsDataURL(file);
     } catch (error) {
-      console.error('Error reading file:', error);
       alert('Error reading file. Please try again.');
       setIsUploading(false);
     }
