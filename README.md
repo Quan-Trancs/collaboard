@@ -2,6 +2,8 @@
 
 A real-time collaborative whiteboard application built with React, TypeScript, and Socket.IO.
 
+> **History:** Evolved from the Vue/Nuxt [WhiteBoard](https://github.com/Quan-Trancs/WhiteBoard) experiment (archived predecessor). Deployable API also lives in [CollaboardBackend](https://github.com/Quan-Trancs/CollaboardBackend); this repo includes a `backend/` folder for local full-stack work.
+
 ## Features
 
 ### Real-time Collaboration
