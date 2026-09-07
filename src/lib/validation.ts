@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { SHAPE_IDS } from "@/components/whiteboard/shapes";
 
 // Authentication schemas
 export const loginSchema = z.object({
@@ -13,22 +14,29 @@ export const signupSchema = z.object({
 });
 
 // Board schemas
+const boardTitleSchema = z.string().min(1, "Title is required").max(200, "Title must be 200 characters or less");
+const hexColorSchema = z.string().regex(/^#[0-9A-F]{6}$/i, "Color must be a valid hex color");
+const fillColorSchema = z.union([
+  hexColorSchema,
+  z.literal("transparent"),
+]);
+
 export const createBoardSchema = z.object({
-  title: z.string().min(1, "Title is required").max(10, "Title must be less than 10 characters"),
+  title: boardTitleSchema,
   description: z.string().optional(),
   isPublic: z.boolean().default(false),
 });
 
 export const updateBoardSchema = z.object({
-  title: z.string().min(1, "Title is required").max(10, "Title must be less than 100 characters").optional(),
+  title: boardTitleSchema.optional(),
   description: z.string().optional(),
   isPublic: z.boolean().optional(),
 });
 
 // Element schemas
 export const elementPositionSchema = z.object({
-  x: z.number().min(0, "X position must be non-negative"),
-  y: z.number().min(0, "Y position must be non-negative"),
+  x: z.number().min(-32000).max(32000),
+  y: z.number().min(-32000).max(32000),
 });
 
 export const elementSizeSchema = z.object({
@@ -37,39 +45,42 @@ export const elementSizeSchema = z.object({
 });
 
 export const elementDataSchema = z.object({
-  color: z.string().regex(/^#[0-9A-F]{6}/i, "Color must be a valid hex color"),
+  color: hexColorSchema,
   strokeWidth: z.number().min(1, "Stroke width must be at least 1").max(20, "Stroke width must be at most 20"),
   text: z.string().optional(),
   points: z.array(z.object({
     x: z.number(),
     y: z.number(),
   })).optional(),
-  src: z.string().url("Image source must be a valid URL").optional(),
+  src: z.string().refine(
+    (value) => value.startsWith("data:image/") || /^https?:\/\//i.test(value),
+    "Image source must be a URL or image data"
+  ).optional(),
   alt: z.string().optional(),
   opacity: z.number().min(0, "Opacity must be between 0 and 1").max(1, "Opacity must be between 0 and 1").optional(),
   borderRadius: z.number().min(0, "Border radius must be non-negative").optional(),
   shapeType: z.string().optional(),
-  fillColor: z.string().regex(/^#[0-9A-F]{6}/i, "Fill color must be a valid hex color").optional(),
+  fillColor: fillColorSchema.optional(),
   data: z.any().optional(), // For tables and charts - will be more specific later
   symbol: z.string().optional(),
   rows: z.number().min(1, "Rows must be at least 1").max(50, "Rows must be at most 50").optional(),
   cols: z.number().min(1, "Columns must be at least 1").max(50, "Columns must be at most 50").optional(),
   chartType: z.string().optional(),
-  colors: z.array(z.string().regex(/^#[0-9A-F]{6}/i, "Color must be a valid hex color")).optional(),
+  colors: z.array(hexColorSchema).optional(),
 });
 
 // Element type mapping from frontend to API
 export const mapElementTypeToApi = (type: string): 'drawing' | 'text' | 'shape' | 'image' | 'table' | 'chart' | 'icon' => {
   switch (type) {
     case 'pen':
-    case 'rectangle':
-    case 'circle':
     case 'eraser':
       return 'drawing';
-    case 'text':
-      return 'text';
+    case 'rectangle':
+    case 'circle':
     case 'shape':
       return 'shape';
+    case 'text':
+      return 'text';
     case 'image':
       return 'image';
     case 'table':
@@ -104,8 +115,8 @@ export const createElementSchema = z.object({
 export const updateElementSchema = z.object({
   data: elementDataSchema.partial().optional(),
   position: z.object({
-    x: z.number().min(0, "X position must be non-negative"),
-    y: z.number().min(0, "Y position must be non-negative"),
+    x: z.number().min(-32000).max(32000),
+    y: z.number().min(-32000).max(32000),
   }).optional(),
   size: z.object({
     width: z.number().min(1, "Width must be at least 1"),
@@ -126,12 +137,15 @@ export const inviteCollaboratorSchema = z.object({
 });
 // Insert element schemas
 export const insertImageSchema = z.object({
-  src: z.string().url("Image source must be a valid URL"),
+  src: z.string().refine(
+    (value) => value.startsWith("data:image/") || /^https?:\/\//i.test(value),
+    "Image source must be a URL or image data"
+  ),
   name: z.string().min(1, "Image name is required"),
 });
 
 export const insertShapeSchema = z.object({
-  type: z.enum(["rectangle", "circle", "triangle", "star", "heart"]),
+  type: z.enum([...SHAPE_IDS, "arrow"]),
 });
 
 export const insertTableSchema = z.object({
@@ -140,7 +154,7 @@ export const insertTableSchema = z.object({
 });
 
 export const insertChartSchema = z.object({
-  type: z.enum(["bar", "line", "pie", "doughnut"]),
+  type: z.enum(["barChart", "pieChart"]),
 });
 
 export const insertIconSchema = z.object({
@@ -148,7 +162,7 @@ export const insertIconSchema = z.object({
 });
 
 export const insertTemplateSchema = z.object({
-  type: z.enum(["titleSlide", "contentSlide", "woColumn"]),
+  type: z.enum(["titleSlide", "contentSlide", "twoColumn", "comparison"]),
 });
 
 // Type exports for use in components

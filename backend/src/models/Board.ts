@@ -6,6 +6,15 @@ export interface IBoard extends Document {
   owner_id: mongoose.Types.ObjectId;
   thumbnail_url?: string;
   is_public: boolean;
+  background: {
+    color?: string;
+    image?: string;
+  };
+  viewport: {
+    x: number;
+    y: number;
+    zoom: number;
+  };
   createdAt: Date;
   updatedAt: Date;
 }
@@ -33,6 +42,15 @@ const BoardSchema = new Schema<IBoard>(
     is_public: {
       type: Boolean,
       default: false,
+    },
+    background: {
+      color: { type: String, default: '#ffffff' },
+      image: { type: String, default: null },
+    },
+    viewport: {
+      x: { type: Number, default: -2000 },
+      y: { type: Number, default: -2000 },
+      zoom: { type: Number, default: 1 },
     },
   },
   {

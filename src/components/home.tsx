@@ -1,4 +1,4 @@
-import React, { useState, Suspense } from "react";
+import React, { useState, useRef, Suspense } from "react";
 import { Toaster } from "@/components/ui/toaster";
 import { useAuth } from "@/contexts/AuthContext";
 import { Loader2 } from "lucide-react";
@@ -26,26 +26,36 @@ function Home() {
     return getBoardIdFromUrl();
   });
   const [configError, setConfigError] = useState<string | null>(null);
+  const lastUserIdRef = useRef<string | null>(user?.id ?? null);
 
   // Update state based on authentication
   React.useEffect(() => {
     if (loading) {
       return;
     }
+
+    const nextUserId = user?.id ?? null;
+    const switchedUser = Boolean(lastUserIdRef.current && nextUserId && lastUserIdRef.current !== nextUserId);
+    lastUserIdRef.current = nextUserId;
     
     if (user) {
-      // Check if there's a boardId in URL - if so, go to whiteboard
+      // A different account must not inherit the previous board URL or list
+      if (switchedUser) {
+        setCurrentBoardId(null);
+        setCurrentState("dashboard");
+        window.history.replaceState({}, '', window.location.pathname);
+        return;
+      }
       const urlBoardId = getBoardIdFromUrl();
       if (urlBoardId) {
         setCurrentBoardId(urlBoardId);
         setCurrentState("whiteboard");
       } else {
-        // If user exists but no board in URL, navigate to dashboard
         setCurrentState("dashboard");
       }
     } else {
       setCurrentState("auth");
-      // Clear URL if user is not logged in
+      setCurrentBoardId(null);
       if (getBoardIdFromUrl()) {
         window.history.replaceState({}, '', window.location.pathname);
       }
@@ -63,17 +73,10 @@ function Home() {
   };
 
   const handleCreateBoard = (boardId?: string) => {
-    if (boardId) {
-      setCurrentBoardId(boardId);
-      setCurrentState("whiteboard");
-      updateUrlForBoard(boardId);
-    } else {
-      // Fallback: create board first, then navigate
-      const newBoardId = Math.random().toString(36).substr(2, 9);
-      setCurrentState("whiteboard");
-      setCurrentBoardId(newBoardId);
-      updateUrlForBoard(newBoardId);
-    }
+    if (!boardId) return;
+    setCurrentBoardId(boardId);
+    setCurrentState("whiteboard");
+    updateUrlForBoard(boardId);
   };
 
   const handleOpenBoard = (boardId: string) => {
@@ -108,8 +111,10 @@ function Home() {
   const handleLogout = async () => {
     try {
       await signOut();
+      lastUserIdRef.current = null;
       setCurrentState("auth");
       setCurrentBoardId(null);
+      updateUrlForBoard(null);
     } catch (error) {
       // Logout error handled silently
     }

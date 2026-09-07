@@ -26,12 +26,14 @@ import { loginSchema, signupSchema } from "@/lib/validation";
 import { validateAndToast } from "@/lib/validationUtils";
 import type { LoginFormData, SignupFormData } from "@/lib/validation";
 import { RetryButton } from "@/components/ui/retry-button";
+import { DEV_LOGIN, IS_DEV_APP } from "@/lib/devMode";
 
 interface AuthFormProps {
   onAuthSuccess?: (user: { id: string; email: string; name: string }) => void;
+  showDevLogin?: boolean;
 }
 
-const AuthForm = ({ onAuthSuccess }: AuthFormProps) => {
+const AuthForm = ({ onAuthSuccess, showDevLogin = IS_DEV_APP }: AuthFormProps) => {
   const [isLogin, setIsLogin] = useState(true);
   const [isLoading, setIsLoading] = useState(false);
   const { toast } = useToast();
@@ -217,6 +219,19 @@ const AuthForm = ({ onAuthSuccess }: AuthFormProps) => {
                 )}
                 {isLoading ? "Please wait..." : isLogin ? "Sign In" : "Sign Up"}
               </Button>
+              {showDevLogin && isLogin && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="w-full"
+                  onClick={() => {
+                    form.setValue("email", DEV_LOGIN.email);
+                    form.setValue("password", DEV_LOGIN.password);
+                  }}
+                >
+                  Use demo account
+                </Button>
+              )}
             </form>
           </Form>
 

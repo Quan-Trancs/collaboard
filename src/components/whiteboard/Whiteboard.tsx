@@ -20,17 +20,48 @@ import {
 } from "lucide-react";
 import ShareModal from "./ShareModal";
 import InsertPanel from "./InsertPanel";
+import TextStylePanel from "./TextStylePanel";
+import ColorPicker from "./ColorPicker";
+import ShapeGraphic from "./ShapeGraphic";
+import { getShape } from "./shapes";
+import { normalizeHex } from "./colorPalette";
+import TextBoxEditor, { TextBoxHandles } from "./TextBoxEditor";
+import {
+  DEFAULT_TEXT_BOX_WIDTH,
+  DEFAULT_TEXT_STYLE,
+  MIN_TEXT_BOX_HEIGHT,
+  MIN_TEXT_BOX_WIDTH,
+  TEXT_BOX_PADDING,
+  TEXT_WRAP_WIDTH,
+  cssFont,
+  styleFromElement,
+  textBoxContentWidth,
+  textBoxMinHeight,
+  wrapPlainText,
+  type TextStyle,
+} from "./textStyle";
 import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { useToast } from "@/components/ui/use-toast";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { ImageElement, ShapeElement, TableElement, ChartElement, IconElement } from "./InsertableElements";
-import { elementApi, boardApi } from "@/lib/api";
+import { elementApi, boardApi, objectApi, drawingApi } from "@/lib/api";
+import { ApiError } from "@/lib/apiClient";
+import {
+  boundsFromItems,
+  clampCameraPan,
+  clampPointToHardWorld,
+  clampPointToRect,
+  clampZoom,
+  contentLeash,
+  MIN_ZOOM,
+  MAX_ZOOM,
+} from "@/lib/canvasBounds";
+import type { DrawingElement, SlideObject, InkStroke, BoardViewport, BoardShareInfo, Tool } from "@/types";
 import { ErrorHandler, handleAsyncError } from "@/lib/errorHandler";
 import {
   createElementApiSchema,
-  updateElementSchema,
   insertImageSchema,
   insertShapeSchema,
   insertTableSchema,
@@ -42,19 +73,28 @@ import {
 import { validateAndToast } from "@/lib/validationUtils";
 import { WhiteboardSkeleton, RetryButton, LoadingOverlay } from "@/components/ui/loading";
 import { useSocket } from "@/hooks/useSocket";
+import {
+  cloneElements,
+  dataTransferHasFiles,
+  fitImageSize,
+  isImageFile,
+  isTypingTarget,
+  newElementId,
+  parseClipboardText,
+  PASTE_OFFSET,
+  readImageFile,
+  serializeElements,
+  toDrawingElements,
+} from "./boardClipboard";
+import {
+  compactElementPatch,
+  createThrottle,
+  interpolateCursors,
+  PREVIEW_INTERVAL_MS,
+  type CursorPresence,
+} from "@/lib/livePresence";
 
 // Constants - moved outside component to prevent recreation on every render
-const COLORS = [
-  "#000000",
-  "#EF4444",
-  "#3B82F6",
-  "#10B981",
-  "#F59E0B",
-  "#8B5CF6",
-  "#EC4899",
-  "#6B7280",
-] as const;
-
 const STROKE_WIDTHS = [1, 2, 4, 8] as const;
 
 // Utility function - extracted to prevent duplication
@@ -64,6 +104,51 @@ const isValidBoardId = (id: string | undefined): boolean => {
   const mongoIdRegex = /^[0-9a-f]{24}$/i;
   return uuidRegex.test(id) || mongoIdRegex.test(id);
 };
+
+const isInkType = (type: string) => type === "pen" || type === "drawing";
+
+function elementBounds(element: {
+  type: string;
+  x: number;
+  y: number;
+  width?: number;
+  height?: number;
+  text?: string;
+  strokeWidth: number;
+}) {
+  if (element.type === "text") {
+    const style = styleFromElement(element);
+    const width = element.width || DEFAULT_TEXT_BOX_WIDTH;
+    const height = element.height || textBoxMinHeight(style);
+    return { x: element.x, y: element.y, width, height };
+  }
+  const width = element.width || 0;
+  const height = element.height || 0;
+  return {
+    x: Math.min(element.x, element.x + width),
+    y: Math.min(element.y, element.y + height),
+    width: Math.abs(width),
+    height: Math.abs(height),
+  };
+}
+
+function hitTestElement(
+  elements: DrawingElement[],
+  x: number,
+  y: number
+) {
+  for (let index = elements.length - 1; index >= 0; index -= 1) {
+    const element = elements[index];
+    if (isInkType(element.type) || element.type === "eraser" || element.type === "select") continue;
+    const box = elementBounds(element);
+    if (x >= box.x && x <= box.x + box.width && y >= box.y && y <= box.y + box.height) {
+      return element;
+    }
+  }
+  return null;
+}
+
+const DEFAULT_CAMERA: BoardViewport = { x: -2000, y: -2000, zoom: 1 };
 
 // Type definitions for database responses
 interface DatabaseElement {
@@ -113,32 +198,19 @@ interface WhiteboardProps {
   onLogout?: () => void;
 }
 
-type Tool = "pen" | "rectangle" | "circle" | "text" | "eraser" | "select";
-
-interface DrawingElement {
-  id: string;
-  type: Tool | "image" | "shape" | "table" | "chart" | "icon" | "template";
-  x: number;
-  y: number;
-  width?: number;
-  height?: number;
-  points?: { x: number; y: number }[];
-  text?: string;
-  color: string;
-  strokeWidth: number;
-  // Additional properties for insertable elements
-  src?: string; // for images
-  alt?: string; // for images
-  opacity?: number; // for images
-  borderRadius?: number; // for images
-  shapeType?: string; // for shapes
-  fillColor?: string; // for shapes
-  data?: any; // for tables and charts
-  symbol?: string; // for icons
-  rows?: number; // for tables
-  cols?: number; // for tables
-  chartType?: string; // for charts
-  colors?: string[]; // for charts
+function normalizeElementBox(element: DrawingElement): DrawingElement {
+  let { x, y } = element;
+  let width = element.width || 0;
+  let height = element.height || 0;
+  if (width < 0) {
+    x += width;
+    width = -width;
+  }
+  if (height < 0) {
+    y += height;
+    height = -height;
+  }
+  return { ...element, x, y, width, height };
 }
 
 interface Collaborator {
@@ -158,10 +230,14 @@ const Whiteboard = ({
   const containerRef = useRef<HTMLDivElement>(null);
   const redrawCanvasRef = useRef<(() => void) | null>(null);
   const [isDrawing, setIsDrawing] = useState(false);
+  const isDrawingRef = useRef(false);
   const [currentTool, setCurrentTool] = useState<Tool>("pen");
+  const [activeShape, setActiveShape] = useState<string | null>(null);
   const [currentColor, setCurrentColor] = useState("#000000");
   const [strokeWidth, setStrokeWidth] = useState(2);
   const [elements, setElements] = useState<DrawingElement[]>([]);
+  const elementsRef = useRef<DrawingElement[]>([]);
+  elementsRef.current = elements;
   const [collaborators, setCollaborators] = useState<Collaborator[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -171,9 +247,47 @@ const Whiteboard = ({
   const [showShareModal, setShowShareModal] = useState(false);
   const [isTextMode, setIsTextMode] = useState(false);
   const [textInput, setTextInput] = useState("");
-  const [textPosition, setTextPosition] = useState({ x: 0, y: 0 });
+  const [editingTextId, setEditingTextId] = useState<string | null>(null);
+  const committingTextRef = useRef(false);
+  const [textStyle, setTextStyle] = useState<TextStyle>(DEFAULT_TEXT_STYLE);
+  const [highlightLayout, setHighlightLayout] = useState(false);
+  const creatingTextBoxRef = useRef<{ id: string; startX: number; startY: number } | null>(null);
+  const justCreatedTextRef = useRef(false);
+  const editingSnapshotRef = useRef("");
   const [selectedElement, setSelectedElement] = useState<string | null>(null);
+  const selectedElementRef = useRef<string | null>(null);
+  selectedElementRef.current = selectedElement;
+  const clipboardRef = useRef<DrawingElement[]>([]);
+  const pasteCountRef = useRef(0);
+  const dragDepthRef = useRef(0);
+  const [isDragOver, setIsDragOver] = useState(false);
+  const [canEdit, setCanEdit] = useState(true);
+  const canEditRef = useRef(canEdit);
+  canEditRef.current = canEdit;
+  const isTextModeRef = useRef(isTextMode);
+  isTextModeRef.current = isTextMode;
+  const currentColorRef = useRef(currentColor);
+  currentColorRef.current = currentColor;
+  const currentToolRef = useRef(currentTool);
+  currentToolRef.current = currentTool;
+  const [shareInfo, setShareInfo] = useState<BoardShareInfo | null>(null);
+  const movingElementRef = useRef<{
+    id: string;
+    startX: number;
+    startY: number;
+    origX: number;
+    origY: number;
+  } | null>(null);
+  const selectConsumedClickRef = useRef(false);
   const [eraserPosition, setEraserPosition] = useState<{ x: number; y: number } | null>(null);
+  const [camera, setCamera] = useState<BoardViewport>(DEFAULT_CAMERA);
+  const cameraRef = useRef(camera);
+  cameraRef.current = camera;
+  const [isPanning, setIsPanning] = useState(false);
+  const spacePressedRef = useRef(false);
+  const shiftPressedRef = useRef(false);
+  const panStartRef = useRef<{ x: number; y: number; cameraX: number; cameraY: number } | null>(null);
+  const cameraSaveTimerRef = useRef<number | null>(null);
   const { toast } = useToast();
   const [showClearDialog, setShowClearDialog] = useState(false);
   const [showDeleteBoardDialog, setShowDeleteBoardDialog] = useState(false);
@@ -183,7 +297,26 @@ const Whiteboard = ({
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [clearError, setClearError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
-  const [remoteCursors, setRemoteCursors] = useState<Map<string, { x: number; y: number; name: string; color: string }>>(new Map());
+  const [remoteCursors, setRemoteCursors] = useState<Map<string, CursorPresence>>(new Map());
+  const cursorTargetsRef = useRef<Map<string, CursorPresence>>(new Map());
+  const displayedCursorsRef = useRef<Map<string, CursorPresence>>(new Map());
+  const cursorRafRef = useRef(0);
+  const previewThrottleRef = useRef(createThrottle(PREVIEW_INTERVAL_MS));
+
+  const pumpRemoteCursors = useCallback(() => {
+    if (cursorRafRef.current) return;
+    const tick = () => {
+      const next = interpolateCursors(displayedCursorsRef.current, cursorTargetsRef.current);
+      if (next !== displayedCursorsRef.current) {
+        displayedCursorsRef.current = next;
+        setRemoteCursors(next);
+        cursorRafRef.current = window.requestAnimationFrame(tick);
+        return;
+      }
+      cursorRafRef.current = 0;
+    };
+    cursorRafRef.current = window.requestAnimationFrame(tick);
+  }, []);
   const [actualBoardId, setActualBoardId] = useState<string>(boardId);
   const [boardTitle, setBoardTitle] = useState<string>("Untitled Board");
   const [isEditingTitle, setIsEditingTitle] = useState(false);
@@ -227,15 +360,15 @@ const Whiteboard = ({
         return isValidSize(element.width, element.height, false) && element.width !== 0 && element.height !== 0;
       
       case "text":
-        return !!(element.text && typeof element.text === 'string' && element.text.trim().length > 0);
+        return isValidSize(element.width, element.height, false) && (element.width || 0) > 0 && (element.height || 0) > 0;
       
       case "image":
         if (!element.src || typeof element.src !== 'string') return false;
         return !element.width || !element.height || isValidSize(element.width, element.height);
       
       case "shape":
-        if (!element.shapeType || typeof element.shapeType !== 'string') return false;
-        return !element.width || !element.height || isValidSize(element.width, element.height);
+        if (!element.shapeType || typeof element.shapeType !== "string") return false;
+        return isValidSize(element.width, element.height, false) && element.width !== 0 && element.height !== 0;
       
       case "table":
         if (typeof element.rows !== 'number' || typeof element.cols !== 'number' || element.rows <= 0 || element.cols <= 0) {
@@ -253,6 +386,11 @@ const Whiteboard = ({
   }, [isValidSize]);
 
   const debouncedSaveToDatabase = useCallback(async () => {
+    if (socket.isConnected) {
+      pendingSaveRef.current.clear();
+      socket.commitDrawing();
+      return;
+    }
     if (pendingSaveRef.current.size === 0) return;
     
     const elementIds = Array.from(pendingSaveRef.current);
@@ -274,8 +412,22 @@ const Whiteboard = ({
         return;
       }
       
-      // Batch save to database
-      for (const element of validElementsToSave) {
+      const ink = validElementsToSave.filter((el) => isInkType(el.type) && el.points && el.points.length >= 2);
+      const objects = validElementsToSave.filter((el) => !isInkType(el.type));
+
+      if (ink.length > 0) {
+        try {
+          await drawingApi.batchSave(actualBoardId, ink.map((el) => ({
+            id: /^[0-9a-f]{24}$/i.test(el.id) ? el.id : undefined,
+            points: el.points!,
+            color: el.color,
+            strokeWidth: el.strokeWidth,
+          })));
+        } catch (error) {
+        }
+      }
+
+      for (const element of objects) {
         try {
           const elementPayload = {
             board_id: actualBoardId,
@@ -289,7 +441,7 @@ const Whiteboard = ({
               alt: element.alt,
               opacity: element.opacity,
               borderRadius: element.borderRadius,
-              shapeType: element.shapeType,
+              shapeType: element.shapeType || (element.type === "circle" ? "circle" : element.type === "rectangle" ? "rectangle" : undefined),
               fillColor: element.fillColor,
               data: element.data,
               symbol: element.symbol,
@@ -297,8 +449,16 @@ const Whiteboard = ({
               cols: element.cols,
               chartType: element.chartType,
               colors: element.colors,
+              fontSize: element.fontSize,
+              fontFamily: element.fontFamily,
+              bold: element.bold,
+              italic: element.italic,
+              underline: element.underline,
+              strikethrough: element.strikethrough,
+              align: element.align,
+              lineHeight: element.lineHeight,
             },
-            position: { x: element.x, y: element.y },
+            position: clampPointToHardWorld({ x: element.x, y: element.y }),
             size: element.width && element.height ? { width: element.width, height: element.height } : undefined,
           };
           
@@ -309,10 +469,9 @@ const Whiteboard = ({
     } catch (error) {
       ErrorHandler.logError(ErrorHandler.createError(error, "Debounced save to database"), "debouncedSaveToDatabase");
     }
-  }, [elements, actualBoardId, isValidElement]);
+  }, [elements, actualBoardId, isValidElement, socket.isConnected, socket.commitDrawing]);
 
   // Use constants defined outside component
-  const colors = COLORS;
   const strokeWidths = STROKE_WIDTHS;
 
   // Clear eraser position when tool changes
@@ -371,8 +530,6 @@ const Whiteboard = ({
       const rect = canvas.getBoundingClientRect();
       canvas.width = rect.width * window.devicePixelRatio;
       canvas.height = rect.height * window.devicePixelRatio;
-      ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
-      // Call redrawCanvas via ref to avoid dependency issues
       if (redrawCanvasRef.current) {
         redrawCanvasRef.current();
       }
@@ -390,10 +547,19 @@ const Whiteboard = ({
     const ctx = canvas?.getContext("2d");
     if (!canvas || !ctx) return;
 
-    // Clear canvas
+    const dpr = window.devicePixelRatio || 1;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.setTransform(
+      dpr * camera.zoom,
+      0,
+      0,
+      dpr * camera.zoom,
+      -camera.x * dpr * camera.zoom,
+      -camera.y * dpr * camera.zoom
+    );
 
-    // Draw only drawing elements (pen, rectangle, circle, text)
+    // Ink plus toolbar-drawn primitives share the canvas layer
     const drawingElements = elements.filter(element => 
       ["pen", "rectangle", "circle", "text"].includes(element.type)
     );
@@ -435,15 +601,90 @@ const Whiteboard = ({
           break;
 
         case "text":
-          if (element.text) {
-            ctx.font = `${element.strokeWidth * 8}px Arial`;
-            ctx.fillStyle = element.color;
-            ctx.fillText(element.text, element.x, element.y);
+          if (editingTextId === element.id) {
+            break;
+          }
+          {
+            const style = styleFromElement(element);
+            const box = elementBounds(element);
+            const showLayout = highlightLayout || selectedElement === element.id;
+            if (showLayout || !element.text) {
+              ctx.save();
+              if (highlightLayout) {
+                ctx.fillStyle = "rgba(59, 130, 246, 0.06)";
+                ctx.fillRect(box.x, box.y, box.width, box.height);
+              }
+              ctx.strokeStyle = highlightLayout ? "#38BDF8" : !element.text ? "#CBD5E1" : "#93C5FD";
+              ctx.lineWidth = 1 / camera.zoom;
+              ctx.setLineDash(highlightLayout ? [] : [4 / camera.zoom, 3 / camera.zoom]);
+              ctx.strokeRect(box.x, box.y, box.width, box.height);
+              if (highlightLayout) {
+                ctx.setLineDash([3 / camera.zoom, 3 / camera.zoom]);
+                ctx.strokeStyle = "rgba(56, 189, 248, 0.85)";
+                ctx.strokeRect(
+                  box.x + TEXT_BOX_PADDING,
+                  box.y + TEXT_BOX_PADDING,
+                  Math.max(0, box.width - TEXT_BOX_PADDING * 2),
+                  Math.max(0, box.height - TEXT_BOX_PADDING * 2)
+                );
+              }
+              ctx.restore();
+            }
+            if (element.text) {
+              const fontPx = style.fontSize;
+              const lineStep = fontPx * style.lineHeight;
+              const wrapWidth = textBoxContentWidth(box.width);
+              ctx.font = cssFont(style);
+              ctx.textBaseline = "top";
+              ctx.textAlign = "left";
+              ctx.fillStyle = element.color;
+              const lines = wrapPlainText(
+                element.text,
+                (value) => ctx.measureText(value).width,
+                wrapWidth
+              );
+              lines.forEach((line, index) => {
+                const lineWidth = ctx.measureText(line).width;
+                let lineX = element.x + TEXT_BOX_PADDING;
+                if (style.align === "center") lineX = element.x + TEXT_BOX_PADDING + (wrapWidth - lineWidth) / 2;
+                if (style.align === "right") lineX = element.x + TEXT_BOX_PADDING + wrapWidth - lineWidth;
+                const lineY = element.y + TEXT_BOX_PADDING + index * lineStep;
+                ctx.fillText(line, lineX, lineY);
+                if ((style.underline || style.strikethrough) && line) {
+                  ctx.save();
+                  ctx.strokeStyle = element.color;
+                  ctx.lineWidth = Math.max(1, fontPx / 16);
+                  if (style.underline) {
+                    ctx.beginPath();
+                    ctx.moveTo(lineX, lineY + fontPx);
+                    ctx.lineTo(lineX + lineWidth, lineY + fontPx);
+                    ctx.stroke();
+                  }
+                  if (style.strikethrough) {
+                    ctx.beginPath();
+                    ctx.moveTo(lineX, lineY + fontPx * 0.55);
+                    ctx.lineTo(lineX + lineWidth, lineY + fontPx * 0.55);
+                    ctx.stroke();
+                  }
+                  ctx.restore();
+                }
+              });
+            }
           }
           break;
       }
+
+      if (selectedElement === element.id) {
+        const box = elementBounds(element);
+        ctx.save();
+        ctx.strokeStyle = "#3B82F6";
+        ctx.lineWidth = 1 / camera.zoom;
+        ctx.setLineDash([4 / camera.zoom, 3 / camera.zoom]);
+        ctx.strokeRect(box.x, box.y, box.width, box.height);
+        ctx.restore();
+      }
     });
-  }, [elements]);
+  }, [elements, camera, selectedElement, editingTextId, highlightLayout]);
 
   // Keep redrawCanvas ref updated
   useEffect(() => {
@@ -466,7 +707,7 @@ const Whiteboard = ({
 
   const saveToHistory = useCallback(() => {
     // Create a deep copy of current elements
-    const elementsCopy = elements.map(el => ({ ...el, points: el.points ? [...el.points] : undefined }));
+    const elementsCopy = elementsRef.current.map(el => ({ ...el, points: el.points ? [...el.points] : undefined }));
     
     // Use refs to get current values (avoid stale closures)
     const currentHistory = historyRef.current;
@@ -509,10 +750,10 @@ const Whiteboard = ({
     return {
       id: el.id,
       type: elementType,
-      x: el.position?.x ?? 0,
-      y: el.position?.y ?? 0,
-      width: el.size?.width,
-      height: el.size?.height,
+      x: (el as any).transform?.x ?? el.position?.x ?? 0,
+      y: (el as any).transform?.y ?? el.position?.y ?? 0,
+      width: (el as any).transform?.width ?? el.size?.width,
+      height: (el as any).transform?.height ?? el.size?.height,
       color: el.data?.color || "#000000",
       strokeWidth: el.data?.strokeWidth || 2,
       points: el.data?.points,
@@ -529,13 +770,69 @@ const Whiteboard = ({
       cols: el.data?.cols,
       chartType: el.data?.chartType,
       colors: el.data?.colors,
+      fontSize: (el.data as { fontSize?: number } | undefined)?.fontSize,
+      fontFamily: (el.data as { fontFamily?: string } | undefined)?.fontFamily,
+      bold: (el.data as { bold?: boolean } | undefined)?.bold,
+      italic: (el.data as { italic?: boolean } | undefined)?.italic,
+      underline: (el.data as { underline?: boolean } | undefined)?.underline,
+      strikethrough: (el.data as { strikethrough?: boolean } | undefined)?.strikethrough,
+      align: (el.data as { align?: TextStyle["align"] } | undefined)?.align,
+      lineHeight: (el.data as { lineHeight?: number } | undefined)?.lineHeight,
+    };
+  }
+
+  function mapSlideObjectToDrawing(object: SlideObject): DrawingElement {
+    const props = (object.props || {}) as Record<string, any>;
+    return {
+      id: object.id,
+      type: object.type,
+      x: object.transform.x,
+      y: object.transform.y,
+      width: object.transform.width,
+      height: object.transform.height,
+      color: props.color || "#000000",
+      strokeWidth: props.strokeWidth || 2,
+      text: props.text,
+      src: props.src,
+      alt: props.alt,
+      opacity: props.opacity,
+      borderRadius: props.borderRadius,
+      shapeType: props.shapeType,
+      fillColor: props.fillColor,
+      data: props.data,
+      symbol: props.symbol,
+      rows: props.rows,
+      cols: props.cols,
+      chartType: props.chartType,
+      colors: props.colors,
+      fontSize: props.fontSize,
+      fontFamily: props.fontFamily,
+      bold: props.bold,
+      italic: props.italic,
+      underline: props.underline,
+      strikethrough: props.strikethrough,
+      align: props.align,
+      lineHeight: props.lineHeight,
+    };
+  }
+
+  function mapInkStrokeToDrawing(stroke: InkStroke): DrawingElement {
+    const first = stroke.points[0] || { x: 0, y: 0 };
+    return {
+      id: stroke.id,
+      type: "pen",
+      x: first.x,
+      y: first.y,
+      points: stroke.points,
+      color: stroke.color,
+      strokeWidth: stroke.strokeWidth,
     };
   }
   // Helper to map database collaborator to Collaborator
-  function mapDatabaseCollaborator(c: DatabaseCollaborator): Collaborator {
+  function mapDatabaseCollaborator(c: DatabaseCollaborator | { id?: string; name?: string; email?: string; avatar_url?: string; permission?: string }): Collaborator {
     return {
-      id: c.user?.id || c.id || "",
-      name: c.user?.name || c.name || "Unknown",
+      id: (c as DatabaseCollaborator).user?.id || c.id || "",
+      name: (c as DatabaseCollaborator).user?.name || c.name || "Unknown",
       color: "#3B82F6",
       cursor: null,
     };
@@ -591,6 +888,10 @@ const Whiteboard = ({
             pendingBoardIdRef.current = null;
             return;
           }
+
+          if (boardError instanceof ApiError && (boardError.status === 401 || boardError.status === 403)) {
+            throw boardError;
+          }
           
           // If board doesn't exist (404), create it
           const errorMessage = (boardError instanceof Error ? boardError.message : String(boardError)) || String(boardError);
@@ -634,36 +935,34 @@ const Whiteboard = ({
         } else {
           setBoardTitle("Untitled Board");
         }
+
+        if (board.viewport) {
+          setCamera(applyCamera(board.viewport));
+        }
         
-        // Fetch initial elements from database using actual board ID
-        let dbElements: DatabaseElement[] = [];
+        let mappedElements: DrawingElement[] = [];
         try {
-          const elements = await elementApi.getElements(currentBoardId);
-          // Map API response to DatabaseElement format
-          dbElements = elements.map((el) => ({
-            id: el.id,
-            type: el.type,
-            position: el.position ?? undefined,
-            size: el.size ?? undefined,
-            data: el.data ?? undefined,
-          }));
+          const objects = Array.isArray(board.objects)
+            ? board.objects
+            : await objectApi.getObjects(currentBoardId);
+          const drawings = Array.isArray(board.drawings)
+            ? board.drawings
+            : await drawingApi.getDrawings(currentBoardId);
+          mappedElements = [
+            ...drawings.map(mapInkStrokeToDrawing),
+            ...objects.map(mapSlideObjectToDrawing),
+          ];
         } catch (elementsError: unknown) {
-          // If request was aborted, don't process
           if (abortController.signal.aborted) return;
-          
-          // If elements query fails, it might be a new board - just use empty array
           const errorMessage = (elementsError instanceof Error ? elementsError.message : String(elementsError)) || String(elementsError);
           if (errorMessage.includes('404') || errorMessage.includes('not found') || errorMessage.includes('PGRST116')) {
-            dbElements = [];
+            mappedElements = [];
           } else {
             throw elementsError;
           }
         }
         
-        // If request was aborted, don't process
         if (abortController.signal.aborted) return;
-        
-        const mappedElements: DrawingElement[] = dbElements.map(mapDatabaseElementToDrawingElement);
         
         setElements(mappedElements);
         // Initialize history with loaded elements
@@ -676,11 +975,49 @@ const Whiteboard = ({
         setHasUnsavedChanges(false); // Reset unsaved changes when loading from database
         
         // Fetch collaborators
-        const collaboratorsArray = (board && Array.isArray((board as DatabaseBoard).collaborators)) 
-          ? (board as DatabaseBoard).collaborators 
-          : [];
-        const mappedCollaborators: Collaborator[] = (collaboratorsArray || []).map((c: DatabaseCollaborator) => mapDatabaseCollaborator(c));
-        setCollaborators(mappedCollaborators);
+        const boardPeople = board as {
+          owner?: BoardShareInfo["owner"];
+          collaborators?: BoardShareInfo["collaborators"];
+          is_public?: boolean;
+          permission?: string;
+          can_edit?: boolean;
+        };
+        const loadedShare: BoardShareInfo = {
+          owner: boardPeople.owner || {
+            id: user.id,
+            name: user.name,
+            email: user.email,
+            permission: "owner",
+          },
+          collaborators: boardPeople.collaborators || [],
+          is_public: Boolean(boardPeople.is_public),
+          can_manage: boardPeople.permission === "owner" || boardPeople.permission === "admin",
+        };
+        setShareInfo(loadedShare);
+        setCollaborators(
+          loadedShare.collaborators.map((person) => ({
+            id: person.id,
+            name: person.name,
+            color: "#3B82F6",
+            cursor: null,
+          }))
+        );
+        boardApi.getCollaborators(currentBoardId).then((info) => {
+          setShareInfo(info);
+          setCollaborators(
+            info.collaborators.map((person) => ({
+              id: person.id,
+              name: person.name,
+              color: "#3B82F6",
+              cursor: null,
+            }))
+          );
+        }).catch(() => {});
+        const editable = boardPeople.can_edit !== false;
+        setCanEdit(editable);
+        if (!editable) {
+          setCurrentTool("select");
+        }
         
         setError(null);
       } catch (error: unknown) {
@@ -693,6 +1030,14 @@ const Whiteboard = ({
         
         creatingBoardRef.current = false;
         pendingBoardIdRef.current = null;
+        if (error instanceof ApiError && (error.status === 401 || error.status === 403)) {
+          toast({
+            title: "Can't open this board",
+            description: "It is not available for the current account.",
+          });
+          onBackToDashboard?.();
+          return;
+        }
         const appError = ErrorHandler.createError(error, "Loading board data");
         ErrorHandler.logError(appError, "Loading board data");
         toast(ErrorHandler.getToastConfig(appError));
@@ -721,7 +1066,15 @@ const Whiteboard = ({
 
     // Handle board state from server (only on initial connection)
     if (socket.boardState) {
-      const serverElements = socket.boardState.elements.map((el: DatabaseElement) => mapDatabaseElementToDrawingElement(el));
+      const drawings = socket.boardState.drawings?.length
+        ? socket.boardState.drawings.map(mapInkStrokeToDrawing)
+        : [];
+      const objects = socket.boardState.objects?.length
+        ? socket.boardState.objects.map(mapSlideObjectToDrawing)
+        : [];
+      const serverElements = drawings.length || objects.length
+        ? [...drawings, ...objects]
+        : socket.boardState.elements.map((el: DatabaseElement) => mapDatabaseElementToDrawingElement(el));
       setElements(serverElements);
     }
 
@@ -756,7 +1109,7 @@ const Whiteboard = ({
     });
 
     // Listen for undo/redo
-    const unsubscribeUndo = socket.onUndoApplied((data: { action: string; elementId?: string; element?: DatabaseElement; previousState?: DrawingElement; userId: string }) => {
+    const unsubscribeUndo = socket.onUndoApplied((data: { action: string; elementId?: string; element?: DatabaseElement; previousState?: DatabaseElement; userId: string }) => {
       if (data.userId !== user.id) {
         if (data.action === 'delete') {
           setElements((prev) => prev.filter((el) => el.id !== data.elementId));
@@ -776,14 +1129,21 @@ const Whiteboard = ({
     });
 
     // Listen for cursor updates
+    const unsubscribeCleared = socket.onBoardCleared(() => {
+      setElements([]);
+      setHasUnsavedChanges(false);
+    });
+
     const unsubscribeCursor = socket.onCursorUpdate((data: { socketId: string; userId: string; x: number; y: number; name: string; color: string }) => {
       if (data.userId !== user.id) {
-        setRemoteCursors((prev) => {
-          const newCursors = new Map(prev);
-          newCursors.set(data.socketId, { x: data.x, y: data.y, name: data.name, color: data.color });
-          return newCursors;
-        });
+        cursorTargetsRef.current.set(data.socketId, { x: data.x, y: data.y, name: data.name, color: data.color });
+        pumpRemoteCursors();
       }
+    });
+
+    const unsubscribeUserLeft = socket.onUserLeft((data) => {
+      cursorTargetsRef.current.delete(data.socketId);
+      pumpRemoteCursors();
     });
 
     return () => {
@@ -791,22 +1151,100 @@ const Whiteboard = ({
       unsubscribeUpdated();
       unsubscribeDeleted();
       unsubscribeUndo();
+      unsubscribeCleared();
       unsubscribeCursor();
+      unsubscribeUserLeft();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [socket.isConnected, user.id]);
 
+  useEffect(() => {
+    return () => {
+      if (cursorRafRef.current) window.cancelAnimationFrame(cursorRafRef.current);
+      previewThrottleRef.current.cancel();
+    };
+  }, []);
+
   // Helper function to get correct coordinates
+  const getLeash = useCallback(() => {
+    return contentLeash(boundsFromItems(elements));
+  }, [elements]);
+
+  const applyCamera = useCallback((next: BoardViewport) => {
+    const container = containerRef.current;
+    const viewport = {
+      width: container?.clientWidth || window.innerWidth,
+      height: container?.clientHeight || window.innerHeight,
+    };
+    return clampCameraPan({ ...next, zoom: clampZoom(next.zoom) }, viewport, getLeash());
+  }, [getLeash]);
+
+  const persistViewport = useCallback((next: BoardViewport) => {
+    if (!isValidBoardId(actualBoardId)) return;
+    if (cameraSaveTimerRef.current) window.clearTimeout(cameraSaveTimerRef.current);
+    cameraSaveTimerRef.current = window.setTimeout(() => {
+      if (socket.isConnected) {
+        socket.sendViewport(next);
+        return;
+      }
+      boardApi.updateBoard(actualBoardId, { viewport: next }).catch(() => {});
+    }, 800);
+  }, [actualBoardId, socket.isConnected, socket.sendViewport]);
+
+  const moveElementLocal = useCallback((id: string, x: number, y: number) => {
+    const point = clampPointToHardWorld({ x, y });
+    elementsRef.current = elementsRef.current.map((element) =>
+      element.id === id ? { ...element, x: point.x, y: point.y } : element
+    );
+    setElements(elementsRef.current);
+    setHasUnsavedChanges(true);
+    if (socket.isConnected) {
+      previewThrottleRef.current.schedule(() => {
+        socket.sendDrawingUpdate(id, { x: point.x, y: point.y });
+      });
+    }
+  }, [socket.isConnected, socket.sendDrawingUpdate]);
+
+  const commitElement = useCallback((id: string, extra?: Partial<DrawingElement>) => {
+    const current = elementsRef.current.find((element) => element.id === id);
+    if (!current) return;
+    const next = extra ? { ...current, ...extra } : current;
+    if (extra) {
+      elementsRef.current = elementsRef.current.map((element) =>
+        element.id === id ? next : element
+      );
+      setElements(elementsRef.current);
+    }
+    if (socket.isConnected) {
+      previewThrottleRef.current.flush();
+      socket.sendDrawingUpdate(id, compactElementPatch({
+        x: next.x,
+        y: next.y,
+        ...(extra || {
+          width: next.width,
+          height: next.height,
+          points: next.points,
+          text: next.text,
+        }),
+      } as Record<string, unknown>));
+      socket.commitDrawing();
+    }
+    saveToHistory();
+  }, [socket.isConnected, socket.sendDrawingUpdate, socket.commitDrawing, saveToHistory]);
+
   const getCanvasCoordinates = useCallback((e: { clientX: number; clientY: number }) => {
     const container = containerRef.current;
     if (!container) return { x: 0, y: 0 };
     
     const rect = container.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
-    
-    return { x, y };
-  }, []);
+    const screenX = e.clientX - rect.left;
+    const screenY = e.clientY - rect.top;
+    const world = {
+      x: camera.x + screenX / camera.zoom,
+      y: camera.y + screenY / camera.zoom,
+    };
+    return clampPointToRect(world, getLeash());
+  }, [camera, getLeash]);
 
   // Cursor tracking
   useEffect(() => {
@@ -831,55 +1269,182 @@ const Whiteboard = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [socket.isConnected, getCanvasCoordinates]);
 
+  useEffect(() => {
+    const container = containerRef.current;
+    const onWheel = (event: WheelEvent) => {
+      event.preventDefault();
+    };
+    container?.addEventListener("wheel", onWheel, { passive: false });
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.code === "Space") spacePressedRef.current = true;
+      if (e.key === "Shift") shiftPressedRef.current = true;
+    };
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (e.code === "Space") spacePressedRef.current = false;
+      if (e.key === "Shift") shiftPressedRef.current = false;
+    };
+    const shouldPan = (e: MouseEvent) =>
+      e.button === 1 || e.shiftKey || spacePressedRef.current || shiftPressedRef.current;
+
+    const onPointerDownCapture = (e: MouseEvent) => {
+      if (!shouldPan(e)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      setIsPanning(true);
+      panStartRef.current = {
+        x: e.clientX,
+        y: e.clientY,
+        cameraX: cameraRef.current.x,
+        cameraY: cameraRef.current.y,
+      };
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
+    container?.addEventListener("mousedown", onPointerDownCapture, true);
+    return () => {
+      container?.removeEventListener("wheel", onWheel);
+      container?.removeEventListener("mousedown", onPointerDownCapture, true);
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+    };
+  }, [loading]);
+
+  const handleWheel = (e: React.WheelEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    const container = containerRef.current;
+    if (!container) return;
+    const rect = container.getBoundingClientRect();
+    const screenX = e.clientX - rect.left;
+    const screenY = e.clientY - rect.top;
+    const worldX = camera.x + screenX / camera.zoom;
+    const worldY = camera.y + screenY / camera.zoom;
+    const nextZoom = clampZoom(camera.zoom * (e.deltaY > 0 ? 0.9 : 1.1));
+    const next = applyCamera({
+      zoom: nextZoom,
+      x: worldX - screenX / nextZoom,
+      y: worldY - screenY / nextZoom,
+    });
+    setCamera(next);
+    persistViewport(next);
+  };
+
+  const zoomBy = (factor: number) => {
+    const container = containerRef.current;
+    const width = container?.clientWidth || window.innerWidth;
+    const height = container?.clientHeight || window.innerHeight;
+    const centerX = camera.x + width / camera.zoom / 2;
+    const centerY = camera.y + height / camera.zoom / 2;
+    const nextZoom = clampZoom(camera.zoom * factor);
+    const next = applyCamera({
+      zoom: nextZoom,
+      x: centerX - width / nextZoom / 2,
+      y: centerY - height / nextZoom / 2,
+    });
+    setCamera(next);
+    persistViewport(next);
+  };
+
   // Mouse event handlers
-  const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (isTextMode || currentTool === "select") return;
+  const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement> | React.PointerEvent<HTMLCanvasElement>) => {
+    if (e.button === 1 || e.shiftKey || spacePressedRef.current || shiftPressedRef.current || (currentTool === "select" && e.button === 0 && e.altKey)) {
+      e.preventDefault();
+      setIsPanning(true);
+      panStartRef.current = { x: e.clientX, y: e.clientY, cameraX: camera.x, cameraY: camera.y };
+      return;
+    }
+
+    if (isTextMode) return;
+    if (!canEdit && currentTool !== "select") {
+      return;
+    }
 
     const canvas = canvasRef.current;
     if (!canvas) return;
 
     const { x, y } = getCanvasCoordinates(e);
 
+    if (currentTool === "text") {
+      const hit = hitTestElement(elementsRef.current, x, y);
+      if (hit?.type === "text") return;
+      const clamped = clampPointToHardWorld({ x, y });
+      const id = `${Date.now()}-${Math.random()}`;
+      const newElement: DrawingElement = {
+        id,
+        type: "text",
+        x: clamped.x,
+        y: clamped.y,
+        width: DEFAULT_TEXT_BOX_WIDTH,
+        height: textBoxMinHeight(textStyle),
+        text: "",
+        color: currentColor,
+        strokeWidth,
+        ...textStyle,
+      };
+      elementsRef.current = [...elementsRef.current, newElement];
+      setElements(elementsRef.current);
+      creatingTextBoxRef.current = { id, startX: clamped.x, startY: clamped.y };
+      return;
+    }
+
+    if (currentTool === "select") {
+      const hit = hitTestElement(elementsRef.current, x, y);
+      if (hit) {
+        selectConsumedClickRef.current = true;
+        setSelectedElement(hit.id);
+        if (hit.type === "text") {
+          setTextStyle(styleFromElement(hit));
+        }
+        movingElementRef.current = {
+          id: hit.id,
+          startX: x,
+          startY: y,
+          origX: hit.x,
+          origY: hit.y,
+        };
+        return;
+      }
+      setSelectedElement(null);
+      return;
+    }
+
     // Eraser tool - erase on mouse down
     if (currentTool === "eraser") {
+      isDrawingRef.current = true;
       setIsDrawing(true);
       eraseAtPosition(x, y);
       return;
     }
 
+    isDrawingRef.current = true;
     setIsDrawing(true);
 
+    const clamped = clampPointToHardWorld({ x, y });
+    const drawingShape = currentTool === "shape";
     const newElement: DrawingElement = {
       id: `${Date.now()}-${Math.random()}`,
-      type: currentTool,
-      x,
-      y,
+      type: drawingShape ? "shape" : currentTool,
+      x: clamped.x,
+      y: clamped.y,
       color: currentColor,
       strokeWidth,
-      points: currentTool === "pen" ? [{ x, y }] : undefined,
+      points: currentTool === "pen" ? [{ x: clamped.x, y: clamped.y }] : undefined,
       width: currentTool !== "pen" ? 0 : undefined,
       height: currentTool !== "pen" ? 0 : undefined,
+      shapeType: drawingShape ? activeShape || "rectangle" : undefined,
+      fillColor: drawingShape ? currentColor : undefined,
     };
 
     setElements((prev) => [...prev, newElement]);
     
-    // Send via WebSocket for real-time collaboration
     if (socket.isConnected) {
       socket.sendDrawingStart(newElement);
-    }
-    
-    // Mark as having unsaved changes
-    setHasUnsavedChanges(true);
-    
-    // Only add to pending save if element is valid
-    // For pen, wait until we have at least 2 points (after mouse move)
-    // For shapes, wait until they have valid size (after mouse up)
-    if (currentTool === "pen") {
-      // Pen will be saved after mouse move when it has enough points
     } else {
-      // Shapes and text will be validated before saving in mouse up
-      pendingSaveRef.current.add(newElement.id);
-      debouncedSaveToDatabase();
+      setHasUnsavedChanges(true);
+      if (currentTool !== "pen") {
+        pendingSaveRef.current.add(newElement.id);
+        debouncedSaveToDatabase();
+      }
     }
   };
 
@@ -979,16 +1544,15 @@ const Whiteboard = ({
             // Send delete via WebSocket
             if (socket.isConnected) {
               socket.sendElementDelete(element.id);
+            } else {
+              handleAsyncError(async () => {
+                try {
+                  await elementApi.deleteElement(element.id);
+                } catch (error) {
+                  // Ignore errors - element will be removed from UI anyway
+                }
+              });
             }
-            
-            // Delete from database
-            handleAsyncError(async () => {
-              try {
-                await elementApi.deleteElement(element.id);
-              } catch (error) {
-                // Ignore errors - element will be removed from UI anyway
-              }
-            });
             
             return null; // Mark for deletion
           }
@@ -1006,7 +1570,45 @@ const Whiteboard = ({
     });
   }, [strokeWidth, socket, debouncedSaveToDatabase, saveToHistory]);
 
-  const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
+  useEffect(() => {
+    if (!isPanning) return;
+
+    const onMove = (e: MouseEvent) => {
+      if (!panStartRef.current) return;
+      const current = cameraRef.current;
+      const next = applyCamera({
+        ...current,
+        x: panStartRef.current.cameraX - (e.clientX - panStartRef.current.x) / current.zoom,
+        y: panStartRef.current.cameraY - (e.clientY - panStartRef.current.y) / current.zoom,
+      });
+      setCamera(next);
+    };
+
+    const onUp = () => {
+      setIsPanning(false);
+      panStartRef.current = null;
+      persistViewport(cameraRef.current);
+    };
+
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+  }, [isPanning, applyCamera, persistViewport]);
+
+  const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement> | React.PointerEvent<HTMLCanvasElement>) => {
+    if (isPanning) return;
+
+    if (
+      (isDrawingRef.current || movingElementRef.current || creatingTextBoxRef.current) &&
+      e.buttons === 0
+    ) {
+      handleMouseUp();
+      return;
+    }
+
     const canvas = canvasRef.current;
     if (!canvas) return;
 
@@ -1028,11 +1630,29 @@ const Whiteboard = ({
       }
     }
 
+    const creating = creatingTextBoxRef.current;
+    if (creating) {
+      elementsRef.current = elementsRef.current.map((element) =>
+        element.id === creating.id
+          ? { ...element, width: x - creating.startX, height: y - creating.startY }
+          : element
+      );
+      setElements(elementsRef.current);
+      return;
+    }
+
+    const moving = movingElementRef.current;
+    if (moving) {
+      moveElementLocal(moving.id, moving.origX + (x - moving.startX), moving.origY + (y - moving.startY));
+      return;
+    }
+
     if (!isDrawing || isTextMode || currentTool === "select") return;
 
     setElements((prev) => {
       const newElements = [...prev];
       const currentElement = newElements[newElements.length - 1];
+      if (!currentElement) return prev;
 
       if (currentTool === "pen") {
         currentElement.points = [...(currentElement.points || []), { x, y }];
@@ -1040,48 +1660,103 @@ const Whiteboard = ({
         currentElement.width = (x - currentElement.x);
         currentElement.height = (y - currentElement.y);
       }
-
-      // Send update via WebSocket (throttled)
-      if (socket.isConnected && currentElement.id) {
-        const updates: Partial<DrawingElement> = {};
-        if (currentTool === "pen") {
-          updates.points = currentElement.points;
-        } else {
-          updates.width = currentElement.width;
-          updates.height = currentElement.height;
-        }
-        socket.sendDrawingUpdate(currentElement.id, updates);
-      }
-
+      elementsRef.current = newElements;
       return newElements;
     });
+
+    if (socket.isConnected) {
+      const currentElement = elementsRef.current[elementsRef.current.length - 1];
+      if (!currentElement) return;
+      if (currentTool === "pen") {
+        const points = currentElement.points;
+        previewThrottleRef.current.schedule(() => {
+          socket.sendDrawingUpdate(currentElement.id, { points });
+        });
+      } else {
+        previewThrottleRef.current.schedule(() => {
+          socket.sendDrawingUpdate(currentElement.id, {
+            width: currentElement.width,
+            height: currentElement.height,
+          });
+        });
+      }
+    }
   };
 
   const handleMouseUp = () => {
-    if (isDrawing && currentTool !== "select") {
-      setIsDrawing(false);
-      
-      // Validate and save the completed element
-      setElements((prev) => {
-        if (prev.length > 0) {
-          const lastElement = prev[prev.length - 1];
-          
-          // Validate before saving
-          if (isValidElement(lastElement)) {
-            if (!pendingSaveRef.current.has(lastElement.id)) {
-              pendingSaveRef.current.add(lastElement.id);
-              debouncedSaveToDatabase();
-            }
-          } else {
-            // Completed element is invalid, removing from canvas
-            // Remove invalid element
-            return prev.filter(el => el.id !== lastElement.id);
+    if (isPanning) {
+      setIsPanning(false);
+      panStartRef.current = null;
+      persistViewport(camera);
+    }
+    const creating = creatingTextBoxRef.current;
+    if (creating) {
+      creatingTextBoxRef.current = null;
+      const current = elementsRef.current.find((element) => element.id === creating.id);
+      if (current) {
+        let nextX = current.x;
+        let nextY = current.y;
+        let nextWidth = current.width || 0;
+        let nextHeight = current.height || 0;
+        if (nextWidth < 0) {
+          nextX += nextWidth;
+          nextWidth = -nextWidth;
+        }
+        if (nextHeight < 0) {
+          nextY += nextHeight;
+          nextHeight = -nextHeight;
+        }
+        if (nextWidth < MIN_TEXT_BOX_WIDTH) nextWidth = DEFAULT_TEXT_BOX_WIDTH;
+        if (nextHeight < MIN_TEXT_BOX_HEIGHT) nextHeight = textBoxMinHeight(textStyle);
+        const next = { ...current, x: nextX, y: nextY, width: nextWidth, height: nextHeight };
+        elementsRef.current = elementsRef.current.map((element) =>
+          element.id === creating.id ? next : element
+        );
+        setElements(elementsRef.current);
+        if (socket.isConnected) {
+          socket.sendDrawingStart(next);
+        }
+        setEditingTextId(next.id);
+        setSelectedElement(next.id);
+        setTextInput(next.text || "");
+        editingSnapshotRef.current = next.text || "";
+        setIsTextMode(true);
+        justCreatedTextRef.current = true;
+      }
+      return;
+    }
+
+    const moving = movingElementRef.current;
+    if (moving) {
+      commitElement(moving.id);
+      movingElementRef.current = null;
+    }
+    const wasDrawing = isDrawingRef.current;
+    isDrawingRef.current = false;
+    if (wasDrawing) setIsDrawing(false);
+    if (wasDrawing && currentTool !== "select") {
+      const lastElement = elementsRef.current[elementsRef.current.length - 1];
+      if (lastElement) {
+        const boxed =
+          lastElement.type === "shape" || lastElement.type === "rectangle" || lastElement.type === "circle"
+            ? normalizeElementBox(lastElement)
+            : lastElement;
+        if (boxed !== lastElement) {
+          elementsRef.current = elementsRef.current.map((element) =>
+            element.id === boxed.id ? boxed : element
+          );
+          setElements(elementsRef.current);
+        }
+        if (isValidElement(boxed)) {
+          commitElement(boxed.id, boxed !== lastElement ? boxed : undefined);
+        } else {
+          elementsRef.current = elementsRef.current.filter((element) => element.id !== lastElement.id);
+          setElements(elementsRef.current);
+          if (socket.isConnected) {
+            socket.sendElementDelete(lastElement.id);
           }
         }
-        return prev;
-      });
-      
-      saveToHistory();
+      }
     }
     
     // Clear eraser position when mouse is released (optional - comment out if you want it to persist)
@@ -1090,86 +1765,205 @@ const Whiteboard = ({
     // }
   };
 
+  const handleMouseUpRef = useRef(handleMouseUp);
+  handleMouseUpRef.current = handleMouseUp;
+
+  useEffect(() => {
+    const endStroke = () => handleMouseUpRef.current();
+    window.addEventListener("mouseup", endStroke);
+    window.addEventListener("pointerup", endStroke);
+    window.addEventListener("blur", endStroke);
+    return () => {
+      window.removeEventListener("mouseup", endStroke);
+      window.removeEventListener("pointerup", endStroke);
+      window.removeEventListener("blur", endStroke);
+    };
+  }, []);
+
+  const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    if (e.button === 0 || e.button === 1) {
+      try {
+        e.currentTarget.setPointerCapture(e.pointerId);
+      } catch {
+        // jsdom and some browsers do not implement capture
+      }
+    }
+    handleMouseDown(e);
+  };
+
+  const handlePointerUp = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    if (typeof e.currentTarget.hasPointerCapture === "function" && e.currentTarget.hasPointerCapture(e.pointerId)) {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    }
+    handleMouseUp();
+  };
+
+  const measureTextBlock = (text: string, style: TextStyle, wrapWidth = TEXT_WRAP_WIDTH) => {
+    const canvas = canvasRef.current;
+    const ctx = canvas?.getContext("2d");
+    const fontPx = style.fontSize;
+    const lineStep = fontPx * style.lineHeight;
+    if (!ctx) {
+      const lines = wrapPlainText(text, (value) => value.length * fontPx * 0.5, wrapWidth);
+      return {
+        width: wrapWidth,
+        height: lines.length * lineStep,
+      };
+    }
+    ctx.save();
+    ctx.font = cssFont(style);
+    const lines = wrapPlainText(text, (value) => ctx.measureText(value).width, wrapWidth);
+    const width = Math.min(
+      wrapWidth,
+      Math.max(fontPx, ...lines.map((line) => ctx.measureText(line).width))
+    );
+    ctx.restore();
+    return {
+      width,
+      height: Math.max(lineStep, lines.length * lineStep),
+    };
+  };
+
+  const measureTextBox = (text: string, style: TextStyle, boxWidth: number) => {
+    const content = measureTextBlock(text, style, textBoxContentWidth(boxWidth));
+    return {
+      width: boxWidth,
+      height: Math.max(textBoxMinHeight(style), content.height + TEXT_BOX_PADDING * 2),
+    };
+  };
+
+  const selectedText = elements.find(
+    (element) => element.id === (editingTextId || selectedElement) && element.type === "text"
+  );
+  const editingText = elements.find((element) => element.id === editingTextId && element.type === "text");
+  const showTextStyle = currentTool === "text" || isTextMode || Boolean(selectedText);
+
+  const beginTextEdit = (hit: DrawingElement) => {
+    setEditingTextId(hit.id);
+    setSelectedElement(hit.id);
+    setTextStyle(styleFromElement(hit));
+    setTextInput(hit.text || "");
+    editingSnapshotRef.current = hit.text || "";
+    setIsTextMode(true);
+    setCurrentTool("text");
+    if (hit.color) setCurrentColor(hit.color);
+  };
+
+  const applyTextStyle = (next: TextStyle) => {
+    setTextStyle(next);
+    const targetId = editingTextId || selectedText?.id;
+    if (!targetId) return;
+    const current = elementsRef.current.find((element) => element.id === targetId);
+    if (!current) return;
+    const boxWidth = current.width || DEFAULT_TEXT_BOX_WIDTH;
+    const size = measureTextBox(isTextMode ? textInput : current.text || "", next, boxWidth);
+    const extra = {
+      ...next,
+      width: boxWidth,
+      height: Math.max(current.height || 0, size.height),
+    };
+    if (isTextMode) {
+      elementsRef.current = elementsRef.current.map((element) =>
+        element.id === targetId ? { ...element, ...extra } : element
+      );
+      setElements(elementsRef.current);
+      return;
+    }
+    commitElement(targetId, extra);
+  };
+
+  const applyColor = useCallback((nextColor: string) => {
+    const next = normalizeHex(nextColor) || nextColor;
+    setCurrentColor(next);
+    const targetId = editingTextId || selectedElement;
+    if (!targetId) return;
+    const current = elementsRef.current.find((element) => element.id === targetId);
+    if (!current) return;
+    if (isTextMode) {
+      elementsRef.current = elementsRef.current.map((element) =>
+        element.id === targetId ? { ...element, color: next } : element
+      );
+      setElements(elementsRef.current);
+      return;
+    }
+    if (current.type === "shape") {
+      commitElement(targetId, { color: next, fillColor: next });
+      return;
+    }
+    commitElement(targetId, { color: next });
+  }, [commitElement, editingTextId, isTextMode, selectedElement]);
+
+  const handleCanvasDoubleClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (!canEdit) return;
+    const { x, y } = getCanvasCoordinates(e);
+    const hit = hitTestElement(elementsRef.current, x, y);
+    if (hit?.type !== "text") return;
+    beginTextEdit(hit);
+  };
+
   // Canvas click for text tool and selection
   const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (justCreatedTextRef.current) {
+      justCreatedTextRef.current = false;
+      return;
+    }
+    if (!canEdit && currentTool === "text") return;
     if (currentTool === "text" && !isTextMode) {
-      const canvas = canvasRef.current;
-      if (!canvas) return;
-
       const { x, y } = getCanvasCoordinates(e);
-
-      setTextPosition({ x, y });
-      setIsTextMode(true);
-      setTextInput("");
+      const hit = hitTestElement(elementsRef.current, x, y);
+      if (hit?.type === "text") {
+        beginTextEdit(hit);
+      }
     } else if (currentTool === "select") {
-      // Deselect when clicking on empty canvas
+      if (selectConsumedClickRef.current) {
+        selectConsumedClickRef.current = false;
+        return;
+      }
       setSelectedElement(null);
     }
   };
 
   // Add text to canvas
-  const addText = async () => {
-    if (textInput.trim()) {
-      try {
-        setSaving(true);
-        setAddError(null);
-        
-        const newElement: DrawingElement = {
-          id: `${Date.now()}-${Math.random()}`,
-          type: "text",
-          x: textPosition.x,
-          y: textPosition.y,
+  const finishTextEdit = () => {
+    if (committingTextRef.current) return;
+    committingTextRef.current = true;
+    const id = editingTextId;
+    if (id) {
+      const current = elementsRef.current.find((element) => element.id === id);
+      if (current) {
+        const boxWidth = current.width || DEFAULT_TEXT_BOX_WIDTH;
+        const size = measureTextBox(textInput, textStyle, boxWidth);
+        commitElement(id, {
           text: textInput,
           color: currentColor,
           strokeWidth,
-        };
-        
-        // Add locally
-        setElements((prev) => [...prev, newElement]);
-        saveToHistory();
-        
-        // Send via WebSocket for real-time
-        if (socket.isConnected) {
-          socket.sendDrawingStart(newElement);
-        }
-        
-        // Validate and save text element (text is already validated above with trim check)
-        if (isValidElement(newElement)) {
-          pendingSaveRef.current.add(newElement.id);
-          debouncedSaveToDatabase();
-        } else {
-          // Fallback: save directly to database if socket not connected
-          if (!socket.isConnected) {
-            const elementPayload = {
-              board_id: actualBoardId,
-              type: mapElementTypeToApi("text"),
-              data: { text: textInput, color: currentColor, strokeWidth },
-              position: { x: textPosition.x, y: textPosition.y },
-            };
-            const validated = validateAndToast(createElementApiSchema, elementPayload, "Element");
-            if (validated) {
-              await elementApi.createElement(validated);
-            }
-          }
-        }
-        
-        toast({
-          title: "Text added",
-          description: "Text element has been added to the board.",
+          width: boxWidth,
+          height: Math.max(current.height || 0, size.height),
+          ...textStyle,
         });
-      } catch (error) {
-        const appError = ErrorHandler.createError(error, "Adding text element");
-        ErrorHandler.logError(appError, "Adding text element");
-        toast(ErrorHandler.getToastConfig(appError));
-        setAddError(appError.message);
-      } finally {
-        setSaving(false);
+        setSelectedElement(id);
       }
     }
-
     setIsTextMode(false);
     setTextInput("");
+    setEditingTextId(null);
+    committingTextRef.current = false;
   };
+
+  const cancelTextEdit = () => {
+    if (editingTextId) {
+      elementsRef.current = elementsRef.current.map((element) =>
+        element.id === editingTextId ? { ...element, text: editingSnapshotRef.current } : element
+      );
+      setElements(elementsRef.current);
+      setSelectedElement(editingTextId);
+    }
+    setIsTextMode(false);
+    setTextInput("");
+    setEditingTextId(null);
+  };
+
+  const addText = finishTextEdit;
 
   // Undo/Redo (collaborative via WebSocket)
   const undo = () => {
@@ -1244,6 +2038,9 @@ const Whiteboard = ({
       // For now, well just clear the local state
       setElements([]);
       saveToHistory();
+      if (socket.isConnected) {
+        socket.clearBoard();
+      }
       
       toast({
         title: "Canvas cleared",
@@ -1308,7 +2105,20 @@ const Whiteboard = ({
     try {
       setSaving(true);
       setSaveError(null);
-      
+
+      if (socket.isConnected) {
+        socket.flushBoard();
+        if (boardTitle.trim()) {
+          await boardApi.updateBoard(actualBoardId, { title: boardTitle.trim() }).catch(() => {});
+        }
+        pendingSaveRef.current.clear();
+        setHasUnsavedChanges(false);
+        toast({
+          title: "Board saved!",
+          description: "Live board flushed to storage.",
+        });
+        return;
+      }
       
       // Filter elements that should be saved
       const elementsToSync = elements.filter(el => {
@@ -1437,12 +2247,14 @@ const Whiteboard = ({
 
   // Handle insert operations
   const handleInsert = (type: string, data: Record<string, unknown>) => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
+    if (!canEdit) return;
+    const host = containerRef.current || canvasRef.current;
+    if (!host) return;
 
-    const rect = canvas.getBoundingClientRect();
-    const centerX = rect.width / 2;
-    const centerY = rect.height / 2;
+    const rect = host.getBoundingClientRect();
+    const cam = cameraRef.current;
+    const centerX = cam.x + rect.width / cam.zoom / 2;
+    const centerY = cam.y + rect.height / cam.zoom / 2;
 
     let newElement: DrawingElement;
     let validated: Record<string, unknown> | null = null;
@@ -1470,23 +2282,16 @@ const Whiteboard = ({
       case "shape":
         validated = validateAndToast(insertShapeSchema, data, "Shape");
         if (!validated) return;
-        newElement = {
-          id: Date.now().toString(),
-          type: "shape",
-          x: centerX - 50,
-          y: centerY - 50,
-          width: 100,
-          height: 100,
-          shapeType: validated.type as string,
-          color: currentColor,
-          strokeWidth: 2,
-          fillColor: "transparent",
-        };
-        break;
+        setActiveShape(validated.type === "arrow" ? "rightArrow" : String(validated.type));
+        setCurrentTool("shape");
+        currentToolRef.current = "shape";
+        return;
 
       case "table":
         validated = validateAndToast(insertTableSchema, data, "Table");
         if (!validated) return;
+        const tableRows = Number(validated.rows);
+        const tableCols = Number(validated.cols);
         newElement = {
           id: Date.now().toString(),
           type: "table",
@@ -1494,9 +2299,11 @@ const Whiteboard = ({
           y: centerY - 100,
           width: 300,
           height: 200,
-          rows: validated.rows as number,
-          cols: validated.cols as number,
-          data: Array(validated.rows).fill(Array(validated.cols).fill("")),
+          rows: tableRows,
+          cols: tableCols,
+          data: Array.from({ length: tableRows }, () =>
+            Array.from({ length: tableCols }, () => "")
+          ),
           color: currentColor,
           strokeWidth: 1,
         };
@@ -1545,6 +2352,13 @@ const Whiteboard = ({
         const templateElements = getTemplateElements((validated.type as string), centerX, centerY);
         setElements(prev => [...prev, ...templateElements]);
         saveToHistory();
+        setCurrentTool("select");
+        currentToolRef.current = "select";
+        if (templateElements[0]) setSelectedElement(templateElements[0].id);
+        if (socket.isConnected) {
+          templateElements.forEach((element) => socket.sendDrawingStart(element));
+          socket.commitDrawing();
+        }
         return;
 
       default:
@@ -1553,6 +2367,169 @@ const Whiteboard = ({
 
     setElements(prev => [...prev, newElement]);
     saveToHistory();
+    setCurrentTool("select");
+    currentToolRef.current = "select";
+    setSelectedElement(newElement.id);
+    if (socket.isConnected) {
+      socket.sendDrawingStart(newElement);
+      socket.commitDrawing();
+    }
+  };
+
+  const addBoardElements = useCallback((items: DrawingElement[]) => {
+    if (!items.length) return;
+    elementsRef.current = [...elementsRef.current, ...items];
+    setElements(elementsRef.current);
+    setHasUnsavedChanges(true);
+    saveToHistory();
+    if (currentToolRef.current === "select") {
+      setSelectedElement(items[items.length - 1].id);
+    }
+    if (socket.isConnected) {
+      items.forEach((element) => socket.sendDrawingStart(element));
+      socket.commitDrawing();
+    }
+  }, [saveToHistory, socket]);
+
+  const viewportCenterWorld = () => {
+    const container = containerRef.current;
+    const width = container?.clientWidth || 800;
+    const height = container?.clientHeight || 600;
+    const cam = cameraRef.current;
+    return { x: cam.x + width / cam.zoom / 2, y: cam.y + height / cam.zoom / 2 };
+  };
+
+  const clientToWorld = (clientX: number, clientY: number) => {
+    const container = containerRef.current;
+    if (!container) return viewportCenterWorld();
+    const rect = container.getBoundingClientRect();
+    const cam = cameraRef.current;
+    return {
+      x: cam.x + (clientX - rect.left) / cam.zoom,
+      y: cam.y + (clientY - rect.top) / cam.zoom,
+    };
+  };
+
+  const addImagesAt = async (files: File[], x: number, y: number) => {
+    let offset = 0;
+    for (const file of files.filter(isImageFile)) {
+      try {
+        const read = await readImageFile(file);
+        const size = fitImageSize(read.width, read.height);
+        addBoardElements([
+          {
+            id: newElementId(),
+            type: "image",
+            x: x - size.width / 2 + offset,
+            y: y - size.height / 2 + offset,
+            width: size.width,
+            height: size.height,
+            src: read.src,
+            alt: read.name,
+            color: currentColorRef.current,
+            strokeWidth: 1,
+            opacity: 1,
+            borderRadius: 0,
+          },
+        ]);
+        offset += PASTE_OFFSET;
+      } catch {
+        toast({ title: "Could not add image", description: file.name, variant: "destructive" });
+      }
+    }
+  };
+
+  const copySelected = (event?: ClipboardEvent) => {
+    if (isTextModeRef.current || isTypingTarget(event?.target ?? document.activeElement)) return false;
+    const current = elementsRef.current.find((element) => element.id === selectedElementRef.current);
+    if (!current) return false;
+    clipboardRef.current = [current];
+    pasteCountRef.current = 0;
+    event?.clipboardData?.setData("text/plain", serializeElements([current]));
+    event?.preventDefault();
+    return true;
+  };
+
+  const pasteElements = (event?: ClipboardEvent) => {
+    if (!canEditRef.current) return false;
+    if (isTextModeRef.current || isTypingTarget(event?.target ?? document.activeElement)) return false;
+
+    const files = event?.clipboardData?.files
+      ? Array.from(event.clipboardData.files).filter(isImageFile)
+      : [];
+    if (files.length) {
+      event?.preventDefault();
+      const center = viewportCenterWorld();
+      void addImagesAt(files, center.x, center.y);
+      return true;
+    }
+
+    const parsed = parseClipboardText(event?.clipboardData?.getData("text/plain"));
+    const source = parsed?.length ? toDrawingElements(parsed) : clipboardRef.current;
+    if (!source.length) return false;
+    event?.preventDefault();
+    pasteCountRef.current += 1;
+    addBoardElements(cloneElements(source, PASTE_OFFSET * pasteCountRef.current));
+    clipboardRef.current = source;
+    return true;
+  };
+
+  const copySelectedRef = useRef(copySelected);
+  const pasteElementsRef = useRef(pasteElements);
+  copySelectedRef.current = copySelected;
+  pasteElementsRef.current = pasteElements;
+
+  useEffect(() => {
+    const onCopy = (event: ClipboardEvent) => {
+      copySelectedRef.current(event);
+    };
+    const onPaste = (event: ClipboardEvent) => {
+      pasteElementsRef.current(event);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!(event.ctrlKey || event.metaKey) || isTypingTarget(event.target) || isTextModeRef.current) return;
+      if (event.key.toLowerCase() === "c") copySelectedRef.current();
+    };
+    window.addEventListener("copy", onCopy);
+    window.addEventListener("paste", onPaste);
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("copy", onCopy);
+      window.removeEventListener("paste", onPaste);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, []);
+
+  const handleCanvasDragEnter = (event: React.DragEvent) => {
+    if (!canEdit || !dataTransferHasFiles(event.dataTransfer)) return;
+    event.preventDefault();
+    dragDepthRef.current += 1;
+    setIsDragOver(true);
+  };
+
+  const handleCanvasDragOver = (event: React.DragEvent) => {
+    if (!canEdit || !dataTransferHasFiles(event.dataTransfer)) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+  };
+
+  const handleCanvasDragLeave = () => {
+    dragDepthRef.current -= 1;
+    if (dragDepthRef.current <= 0) {
+      dragDepthRef.current = 0;
+      setIsDragOver(false);
+    }
+  };
+
+  const handleCanvasDrop = (event: React.DragEvent) => {
+    event.preventDefault();
+    dragDepthRef.current = 0;
+    setIsDragOver(false);
+    if (!canEdit) return;
+    const files = Array.from(event.dataTransfer.files || []).filter(isImageFile);
+    if (!files.length) return;
+    const point = clientToWorld(event.clientX, event.clientY);
+    void addImagesAt(files, point.x, point.y);
   };
 
   // Get template elements
@@ -1646,6 +2623,38 @@ const Whiteboard = ({
           }
         );
         break;
+
+      case "comparison":
+        elements.push(
+          {
+            id: Date.now().toString() + "-title",
+            type: "text",
+            x: centerX - 100,
+            y: centerY - 90,
+            text: "Comparison",
+            color: "#000000",
+            strokeWidth: 3,
+          },
+          {
+            id: Date.now().toString() + "-left",
+            type: "text",
+            x: centerX - 140,
+            y: centerY - 20,
+            text: "Option A",
+            color: "#333333",
+            strokeWidth: 2,
+          },
+          {
+            id: Date.now().toString() + "-right",
+            type: "text",
+            x: centerX + 40,
+            y: centerY - 20,
+            text: "Option B",
+            color: "#333333",
+            strokeWidth: 2,
+          }
+        );
+        break;
     }
     
     return elements;
@@ -1654,37 +2663,18 @@ const Whiteboard = ({
   // Handle element selection
   const handleElementSelect = (elementId: string) => {
     setSelectedElement(elementId);
+    const selected = elementsRef.current.find((element) => element.id === elementId);
+    if (selected?.type === "text") {
+      setTextStyle(styleFromElement(selected));
+    }
+    if (selected?.color) setCurrentColor(selected.color);
   };
 
   // Handle element update
-  const handleElementUpdate = async (elementId: string, updates: Partial<DrawingElement>) => {
-    try {
-      setSaving(true);
-      setUpdateError(null);
-      setHasUnsavedChanges(true);
-      const validated = validateAndToast(updateElementSchema, updates, "Element Update");
-      if (!validated) {
-        setSaving(false);
-        return;
-      }
-      const updated = await elementApi.updateElement(elementId, validated);
-      setElements(prev => prev.map(element => 
-        element.id === elementId ? mapDatabaseElementToDrawingElement(updated) : element
-      ));
-      saveToHistory();
-      
-      toast({
-        title: "Element updated",
-        description: "Element has been updated successfully.",
-      });
-    } catch (error) {
-      const appError = ErrorHandler.createError(error, "Updating element");
-      ErrorHandler.logError(appError, "Updating element");
-      toast(ErrorHandler.getToastConfig(appError));
-      setUpdateError(appError.message);
-    } finally {
-      setSaving(false);
-    }
+  const handleElementUpdate = (elementId: string, updates: Partial<DrawingElement>) => {
+    setUpdateError(null);
+    setHasUnsavedChanges(true);
+    commitElement(elementId, updates);
   };
 
   // Handle element deletion
@@ -1697,12 +2687,11 @@ const Whiteboard = ({
       // Send via WebSocket for real-time
       if (socket.isConnected) {
         socket.sendElementDelete(elementId);
-      }
-      
-      // Also delete from database
-      try {
-        await elementApi.deleteElement(elementId);
-      } catch (error) {
+      } else {
+        try {
+          await elementApi.deleteElement(elementId);
+        } catch (error) {
+        }
       }
       
       setElements(prev => prev.filter(element => element.id !== elementId));
@@ -1723,15 +2712,34 @@ const Whiteboard = ({
     }
   };
 
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Delete" && event.key !== "Backspace") return;
+      if (!canEditRef.current) return;
+      if (isTextModeRef.current || isTypingTarget(event.target)) return;
+      const id = selectedElementRef.current;
+      if (!id) return;
+      event.preventDefault();
+      void handleElementDelete(id);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [handleElementDelete]);
+
   // Add error state UI
   if (error && !loading) {
     return (
-      <div className="h-screen flex items-center justify-center bg-gray-50">
+      <div className="h-screen flex flex-col items-center justify-center bg-gray-50 gap-3">
         <RetryButton
           error={error}
           onRetry={() => window.location.reload()}
           isLoading={loading}
         />
+        {onBackToDashboard && (
+          <Button variant="outline" onClick={onBackToDashboard}>
+            Back to boards
+          </Button>
+        )}
       </div>
     );
   }
@@ -1784,7 +2792,8 @@ const Whiteboard = ({
             <Button
               variant={currentTool === "pen" ? "default" : "ghost"}
               size="icon"
-              onClick={() => setCurrentTool("pen")}
+              onClick={() => canEdit && setCurrentTool("pen")}
+              disabled={!canEdit}
               aria-label="Pen tool"
               tabIndex={0}
               className="focus:outline-none focus:ring-2 focus:ring-blue-500"
@@ -1799,7 +2808,8 @@ const Whiteboard = ({
             <Button
               variant={currentTool === "rectangle" ? "default" : "ghost"}
               size="icon"
-              onClick={() => setCurrentTool("rectangle")}
+              onClick={() => canEdit && setCurrentTool("rectangle")}
+              disabled={!canEdit}
               aria-label="Rectangle tool"
               tabIndex={0}
               className="focus:outline-none focus:ring-2 focus:ring-blue-500"
@@ -1814,7 +2824,8 @@ const Whiteboard = ({
             <Button
               variant={currentTool === "circle" ? "default" : "ghost"}
               size="icon"
-              onClick={() => setCurrentTool("circle")}
+              onClick={() => canEdit && setCurrentTool("circle")}
+              disabled={!canEdit}
               aria-label="Circle tool"
               tabIndex={0}
               className="focus:outline-none focus:ring-2 focus:ring-blue-500"
@@ -1829,7 +2840,8 @@ const Whiteboard = ({
             <Button
               variant={currentTool === "text" ? "default" : "ghost"}
               size="icon"
-              onClick={() => setCurrentTool("text")}
+              onClick={() => canEdit && setCurrentTool("text")}
+              disabled={!canEdit}
               aria-label="Text tool"
               tabIndex={0}
               className="focus:outline-none focus:ring-2 focus:ring-blue-500"
@@ -1844,7 +2856,8 @@ const Whiteboard = ({
             <Button
               variant={currentTool === "eraser" ? "default" : "ghost"}
               size="icon"
-              onClick={() => setCurrentTool("eraser")}
+              onClick={() => canEdit && setCurrentTool("eraser")}
+              disabled={!canEdit}
               aria-label="Eraser tool"
               tabIndex={0}
               className="focus:outline-none focus:ring-2 focus:ring-blue-500"
@@ -1856,7 +2869,32 @@ const Whiteboard = ({
         </Tooltip>
         <Separator className="w-8" />
         {/* Insert Panel */}
-        <InsertPanel onInsert={handleInsert} />
+        {canEdit && <InsertPanel onInsert={handleInsert} />}
+        {activeShape && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant={currentTool === "shape" ? "default" : "ghost"}
+                size="icon"
+                onClick={() => canEdit && setCurrentTool("shape")}
+                disabled={!canEdit}
+                aria-label={`${getShape(activeShape).name} tool`}
+                tabIndex={0}
+                className="focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                <ShapeGraphic
+                  type={activeShape}
+                  fill={currentColor}
+                  stroke={currentColor === "#FFFFFF" ? "#111827" : currentColor}
+                  strokeWidth={1.5}
+                  className="h-5 w-5"
+                  title={getShape(activeShape).name}
+                />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>{getShape(activeShape).name}</TooltipContent>
+          </Tooltip>
+        )}
         <Separator className="w-8" />
         {/* Stroke Width */}
         <div className="flex flex-col space-y-1" aria-label="Stroke width picker">
@@ -1904,20 +2942,12 @@ const Whiteboard = ({
         </div>
         {/* Right Column - Colors */}
         <div className="w-16 flex flex-col items-center py-4 space-y-2 border-l border-gray-200">
-          <div className="flex flex-col space-y-1" aria-label="Color picker">
-            {colors.map((color) => (
-              <button
-                key={color}
-                className={`w-6 h-6 rounded border-2 focus:outline-none focus:ring-2 focus:ring-blue-500 ${
-                  currentColor === color ? "border-gray-400" : "border-gray-200"
-                }`}
-                style={{ backgroundColor: color }}
-                onClick={() => setCurrentColor(color)}
-                aria-label={`Select color ${color}`}
-                tabIndex={0}
-              />
-            ))}
-          </div>
+          <ColorPicker
+            color={currentColor}
+            onChange={applyColor}
+            disabled={!canEdit}
+            side="right"
+          />
         </div>
       </div>
       {/* Main Canvas Area */}
@@ -1925,6 +2955,15 @@ const Whiteboard = ({
         {/* Top Bar */}
         <div className="h-14 bg-white border-b border-gray-200 flex items-center justify-between px-4">
           <div className="flex items-center space-x-4 flex-1">
+            <div className="flex items-center space-x-1 mr-2">
+              <Button variant="ghost" size="icon" onClick={() => zoomBy(0.9)} aria-label="Zoom out">
+                <Minus className="h-4 w-4" />
+              </Button>
+              <span className="text-xs w-12 text-center">{Math.round(camera.zoom * 100)}%</span>
+              <Button variant="ghost" size="icon" onClick={() => zoomBy(1.1)} aria-label="Zoom in">
+                <Plus className="h-4 w-4" />
+              </Button>
+            </div>
             {isEditingTitle ? (
               <input
                 type="text"
@@ -1978,6 +3017,7 @@ const Whiteboard = ({
             <Badge variant={hasUnsavedChanges ? "outline" : "secondary"}>
               {saving ? "Saving..." : hasUnsavedChanges ? "Unsaved" : "Saved"}
             </Badge>
+            {!canEdit && <Badge variant="outline">View only</Badge>}
             {loading && (
               <Badge variant="outline" className="animate-pulse">
                 Loading...
@@ -2079,53 +3119,108 @@ const Whiteboard = ({
               <TooltipContent>Delete Board</TooltipContent>
             </Tooltip>
           </div>
-          {/* Collaborators */}
-          <div className="flex items-center space-x-2">
-            <span className="text-sm text-gray-600 mr-2">
-              {collaborators.length + 1} collaborators
-            </span>
-            {collaborators.map((collaborator) => (
-              <Avatar key={collaborator.id} className="h-8 w-8">
-                <AvatarImage
-                  src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${collaborator.name}`}
-                />
-                <AvatarFallback className="text-xs">
-                  {collaborator.name.charAt(0)}
-                </AvatarFallback>
-              </Avatar>
-            ))}
-            <Avatar className="h-8 w-8">
-              <AvatarImage
-                src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${user.name}`}
-              />
-              <AvatarFallback className="text-xs">
-                {user.name.charAt(0)}
-              </AvatarFallback>
-            </Avatar>
+          <div className="shrink-0 flex items-center gap-2 pl-3 border-l border-gray-200" aria-label="Collaborator list">
+            <button
+              type="button"
+              className="flex items-center gap-2 text-left hover:bg-gray-50 rounded-md px-2 py-1"
+              onClick={() => setShowShareModal(true)}
+            >
+              <div className="flex -space-x-2">
+                {(shareInfo
+                  ? [shareInfo.owner, ...shareInfo.collaborators].filter(Boolean)
+                  : [{ id: user.id, name: user.name }]
+                ).slice(0, 5).map((person) => (
+                  <Avatar key={person!.id} className="h-8 w-8 border-2 border-white">
+                    <AvatarImage src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${person!.name}`} />
+                    <AvatarFallback className="text-xs">{person!.name.charAt(0)}</AvatarFallback>
+                  </Avatar>
+                ))}
+              </div>
+              <div className="hidden md:block min-w-0">
+                <p className="text-xs font-medium text-gray-800 truncate max-w-[160px]">
+                  {(shareInfo
+                    ? [shareInfo.owner?.name, ...shareInfo.collaborators.map((person) => person.name)].filter(Boolean)
+                    : [user.name]
+                  ).join(", ")}
+                </p>
+                <p className="text-xs text-gray-500">
+                  {(shareInfo ? 1 + shareInfo.collaborators.length : 1)} people · View list
+                </p>
+              </div>
+            </button>
           </div>
         </div>
+        {showTextStyle && (
+          <TextStylePanel
+            style={textStyle}
+            color={currentColor}
+            onColorChange={applyColor}
+            onChange={applyTextStyle}
+            highlightLayout={highlightLayout}
+            onToggleHighlightLayout={() => setHighlightLayout((value) => !value)}
+          />
+        )}
         {/* Canvas Container */}
-        <div ref={containerRef} className="relative flex-1" aria-label="Whiteboard canvas area">
+        <div
+          ref={containerRef}
+          className="relative flex-1 overflow-hidden bg-white"
+          aria-label="Whiteboard canvas area"
+          onWheel={handleWheel}
+          onDragEnter={handleCanvasDragEnter}
+          onDragOver={handleCanvasDragOver}
+          onDragLeave={handleCanvasDragLeave}
+          onDrop={handleCanvasDrop}
+        >
+          {isDragOver && (
+            <div
+              className="pointer-events-none absolute inset-3 z-20 flex items-center justify-center rounded-lg border-2 border-dashed border-blue-400 bg-blue-50/70"
+              aria-label="Drop image to add"
+            >
+              <p className="text-sm font-medium text-blue-700">Drop image to add it</p>
+            </div>
+          )}
           {/* Drawing Canvas */}
           <canvas
             ref={canvasRef}
-            className="absolute inset-0 w-full h-full bg-white"
-            style={cursorStyle}
-            onMouseDown={handleMouseDown}
-            onMouseMove={handleMouseMove}
-            onMouseUp={handleMouseUp}
-            onMouseLeave={() => setEraserPosition(null)}
+            className="absolute inset-0 w-full h-full bg-transparent"
+            style={{
+              ...cursorStyle,
+              cursor: isPanning || spacePressedRef.current || shiftPressedRef.current ? "grab" : cursorStyle.cursor,
+              zIndex: currentTool === "select" || isTextMode ? 1 : 4,
+            }}
+            onPointerDown={handlePointerDown}
+            onPointerMove={handleMouseMove}
+            onPointerUp={handlePointerUp}
+            onPointerCancel={handlePointerUp}
+            onMouseLeave={() => {
+              setEraserPosition(null);
+            }}
             onClick={handleCanvasClick}
+            onDoubleClick={handleCanvasDoubleClick}
             role="region"
             aria-label="Drawing canvas"
             tabIndex={0}
           />
           
-          {/* Insertable Elements */}
+          {/* Slide objects — world layer, no page border */}
+          <div
+            className="absolute inset-0 pointer-events-none"
+            style={{
+              transform: `translate(${-camera.x * camera.zoom}px, ${-camera.y * camera.zoom}px) scale(${camera.zoom})`,
+              transformOrigin: "0 0",
+              zIndex: currentTool === "select" || isTextMode ? 4 : 1,
+            }}
+          >
+          <div
+            className={currentTool === "select" ? "pointer-events-auto" : "pointer-events-none"}
+            data-testid="overlay-objects"
+            data-interactive={currentTool === "select" ? "true" : "false"}
+          >
           {elements
             .filter(element => ["image", "shape", "table", "chart", "icon"].includes(element.type))
             .map((element) => {
               const isSelected = selectedElement === element.id;
+              const interactive = currentTool === "select";
               
               switch (element.type) {
                 case "image":
@@ -2134,10 +3229,13 @@ const Whiteboard = ({
                       key={element.id}
                       element={element}
                       isSelected={isSelected}
+                      interactive={interactive}
+                      zoom={camera.zoom}
                       onSelect={() => handleElementSelect(element.id)}
                       onUpdate={(updates) => handleElementUpdate(element.id, updates)}
                       onDelete={() => handleElementDelete(element.id)}
-                      onMove={(x, y) => handleElementUpdate(element.id, { x, y })}
+                      onMove={(x, y) => moveElementLocal(element.id, x, y)}
+                      onDragEnd={() => commitElement(element.id)}
                       onResize={(width, height) => handleElementUpdate(element.id, { width, height })}
                     />
                   );
@@ -2147,10 +3245,13 @@ const Whiteboard = ({
                       key={element.id}
                       element={element}
                       isSelected={isSelected}
+                      interactive={interactive}
+                      zoom={camera.zoom}
                       onSelect={() => handleElementSelect(element.id)}
                       onUpdate={(updates) => handleElementUpdate(element.id, updates)}
                       onDelete={() => handleElementDelete(element.id)}
-                      onMove={(x, y) => handleElementUpdate(element.id, { x, y })}
+                      onMove={(x, y) => moveElementLocal(element.id, x, y)}
+                      onDragEnd={() => commitElement(element.id)}
                       onResize={(width, height) => handleElementUpdate(element.id, { width, height })}
                     />
                   );
@@ -2160,10 +3261,13 @@ const Whiteboard = ({
                       key={element.id}
                       element={element}
                       isSelected={isSelected}
+                      interactive={interactive}
+                      zoom={camera.zoom}
                       onSelect={() => handleElementSelect(element.id)}
                       onUpdate={(updates) => handleElementUpdate(element.id, updates)}
                       onDelete={() => handleElementDelete(element.id)}
-                      onMove={(x, y) => handleElementUpdate(element.id, { x, y })}
+                      onMove={(x, y) => moveElementLocal(element.id, x, y)}
+                      onDragEnd={() => commitElement(element.id)}
                       onResize={(width, height) => handleElementUpdate(element.id, { width, height })}
                     />
                   );
@@ -2173,10 +3277,13 @@ const Whiteboard = ({
                       key={element.id}
                       element={element}
                       isSelected={isSelected}
+                      interactive={interactive}
+                      zoom={camera.zoom}
                       onSelect={() => handleElementSelect(element.id)}
                       onUpdate={(updates) => handleElementUpdate(element.id, updates)}
                       onDelete={() => handleElementDelete(element.id)}
-                      onMove={(x, y) => handleElementUpdate(element.id, { x, y })}
+                      onMove={(x, y) => moveElementLocal(element.id, x, y)}
+                      onDragEnd={() => commitElement(element.id)}
                       onResize={(width, height) => handleElementUpdate(element.id, { width, height })}
                     />
                   );
@@ -2186,10 +3293,13 @@ const Whiteboard = ({
                       key={element.id}
                       element={element}
                       isSelected={isSelected}
+                      interactive={interactive}
+                      zoom={camera.zoom}
                       onSelect={() => handleElementSelect(element.id)}
                       onUpdate={(updates) => handleElementUpdate(element.id, updates)}
                       onDelete={() => handleElementDelete(element.id)}
-                      onMove={(x, y) => handleElementUpdate(element.id, { x, y })}
+                      onMove={(x, y) => moveElementLocal(element.id, x, y)}
+                      onDragEnd={() => commitElement(element.id)}
                       onResize={(width, height) => handleElementUpdate(element.id, { width, height })}
                     />
                   );
@@ -2197,14 +3307,64 @@ const Whiteboard = ({
                   return null;
               }
             })}
+          </div>
+          <div className="pointer-events-auto">
+          {isTextMode && editingText && (
+            <TextBoxEditor
+              x={editingText.x}
+              y={editingText.y}
+              width={editingText.width || DEFAULT_TEXT_BOX_WIDTH}
+              height={editingText.height || textBoxMinHeight(textStyle)}
+              value={textInput}
+              style={textStyle}
+              color={currentColor}
+              zoom={camera.zoom}
+              highlightLayout={highlightLayout}
+              onChange={(value) => {
+                setTextInput(value);
+                elementsRef.current = elementsRef.current.map((element) =>
+                  element.id === editingText.id ? { ...element, text: value } : element
+                );
+                setElements(elementsRef.current);
+              }}
+              onCommit={finishTextEdit}
+              onCancel={cancelTextEdit}
+              onResize={(width, height) => {
+                elementsRef.current = elementsRef.current.map((element) =>
+                  element.id === editingText.id ? { ...element, width, height } : element
+                );
+                setElements(elementsRef.current);
+              }}
+              onResizeEnd={() => commitElement(editingText.id)}
+            />
+          )}
+          {!isTextMode && selectedText && (
+            <TextBoxHandles
+              x={selectedText.x}
+              y={selectedText.y}
+              width={selectedText.width || DEFAULT_TEXT_BOX_WIDTH}
+              height={selectedText.height || textBoxMinHeight(styleFromElement(selectedText))}
+              zoom={camera.zoom}
+              highlightLayout={highlightLayout}
+              onResize={(width, height) => {
+                elementsRef.current = elementsRef.current.map((element) =>
+                  element.id === selectedText.id ? { ...element, width, height } : element
+                );
+                setElements(elementsRef.current);
+              }}
+              onResizeEnd={() => commitElement(selectedText.id)}
+            />
+          )}
+          </div>
+          </div>
           
           {/* Eraser Preview */}
           {currentTool === "eraser" && eraserPosition && (
             <div
               className="absolute pointer-events-none z-20"
               style={{
-                left: eraserPosition.x,
-                top: eraserPosition.y,
+                left: (eraserPosition.x - camera.x) * camera.zoom,
+                top: (eraserPosition.y - camera.y) * camera.zoom,
                 width: strokeWidth * 8,
                 height: strokeWidth * 8,
                 borderRadius: "50%",
@@ -2222,8 +3382,8 @@ const Whiteboard = ({
               key={socketId}
               className="absolute pointer-events-none z-10"
               style={{
-                left: cursor.x,
-                top: cursor.y,
+                left: (cursor.x - camera.x) * camera.zoom,
+                top: (cursor.y - camera.y) * camera.zoom,
                 transform: "translate(-2px, -2px)",
               }}
               aria-label={`Collaborator cursor: ${cursor.name}`}
@@ -2240,40 +3400,6 @@ const Whiteboard = ({
               </div>
             </div>
           ))}
-          {/* Text Input Overlay */}
-          {isTextMode && (
-            <div
-              className="absolute z-20"
-              style={{
-                left: textPosition.x,
-                top: textPosition.y - 30,
-              }}
-              aria-label="Text input overlay"
-            >
-              <input
-                type="text"
-                value={textInput}
-                onChange={(e) => setTextInput(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    addText();
-                  } else if (e.key === "Escape") {
-                    setIsTextMode(false);
-                    setTextInput("");
-                  }
-                }}
-                onBlur={addText}
-                autoFocus
-                className="px-2 py-1 border border-gray-300 rounded text-sm"
-                placeholder="Type text..."
-                style={{
-                  color: currentColor,
-                  fontSize: `${strokeWidth * 8}px`,
-                }}
-                aria-label="Text input"
-              />
-            </div>
-          )}
         </div>
       </div>
       {/* Share Modal */}
@@ -2282,6 +3408,24 @@ const Whiteboard = ({
         onOpenChange={setShowShareModal}
         boardTitle={boardTitle}
         boardId={actualBoardId}
+        currentUser={{ id: user.id, name: user.name, email: user.email }}
+        onShareChange={(info) => {
+          if (!info) return;
+          setShareInfo((current) => ({
+            owner: info.owner,
+            collaborators: info.collaborators,
+            is_public: current?.is_public ?? false,
+            can_manage: current?.can_manage ?? true,
+          }));
+          setCollaborators(
+            info.collaborators.map((person) => ({
+              id: person.id,
+              name: person.name,
+              color: "#3B82F6",
+              cursor: null,
+            }))
+          );
+        }}
       />
       {/* Clear Confirmation Dialog */}
       <Dialog open={showClearDialog} onOpenChange={setShowClearDialog}>

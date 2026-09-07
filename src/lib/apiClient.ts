@@ -32,11 +32,17 @@ interface CacheEntry {
 }
 
 const cache = new Map<string, CacheEntry>();
+let cacheEpoch = 0;
 
 // Helper to get auth token
 const getAuthToken = (): string | null => {
   if (typeof window === 'undefined') return null;
   return localStorage.getItem('auth_token');
+};
+
+const makeCacheKey = (endpoint: string, body: unknown) => {
+  const token = getAuthToken() || 'anon';
+  return `${token}:${endpoint}:${JSON.stringify(body ?? {})}`;
 };
 
 // Helper to clear expired cache entries
@@ -72,16 +78,18 @@ export const apiRequest = async <T>(
     ...fetchOptions
   } = options;
 
-  // Check cache for GET requests
+  const epochAtStart = cacheEpoch;
+  const tokenAtStart = skipAuth ? null : getAuthToken();
+
+  // Check cache for GET requests (keyed by auth token so users never share lists)
   if (useCache && (fetchOptions.method === undefined || fetchOptions.method === 'GET')) {
-    const cacheKey = `${endpoint}${JSON.stringify(fetchOptions.body || {})}`;
-    const cached = cache.get(cacheKey);
+    const cached = cache.get(makeCacheKey(endpoint, fetchOptions.body));
     if (cached && Date.now() - cached.timestamp < cached.ttl) {
       return cached.data as T;
     }
   }
 
-  const token = skipAuth ? null : getAuthToken();
+  const token = tokenAtStart;
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     ...(fetchOptions.headers as Record<string, string>),
@@ -111,8 +119,8 @@ export const apiRequest = async <T>(
           errorData = { error: `HTTP ${response.status}: ${response.statusText}` };
         }
 
-        // Don't retry on client errors (4xx) except 429 (rate limit)
-        if (response.status >= 400 && response.status < 500 && response.status !== 429) {
+        // Don't retry on client errors (4xx), including 429 — retries make rate limits worse
+        if (response.status >= 400 && response.status < 500) {
           throw new ApiError(
             errorData.error || `Request failed with status ${response.status}`,
             response.status,
@@ -121,8 +129,8 @@ export const apiRequest = async <T>(
           );
         }
 
-        // Retry on server errors (5xx) or rate limits (429)
-        if (attempt < retries && (response.status >= 500 || response.status === 429)) {
+        // Retry on server errors (5xx)
+        if (attempt < retries && response.status >= 500) {
           const delay = RETRY_DELAY * Math.pow(2, attempt); // Exponential backoff
           await sleep(delay);
           continue;
@@ -138,10 +146,14 @@ export const apiRequest = async <T>(
 
       const data = await response.json();
 
-      // Cache successful GET requests
-      if (useCache && (fetchOptions.method === undefined || fetchOptions.method === 'GET')) {
-        const cacheKey = `${endpoint}${JSON.stringify(fetchOptions.body || {})}`;
-        cache.set(cacheKey, {
+      // Skip cache writes if auth changed while this request was in flight
+      if (
+        useCache &&
+        epochAtStart === cacheEpoch &&
+        tokenAtStart === getAuthToken() &&
+        (fetchOptions.method === undefined || fetchOptions.method === 'GET')
+      ) {
+        cache.set(makeCacheKey(endpoint, fetchOptions.body), {
           data,
           timestamp: Date.now(),
           ttl: cacheTTL,
@@ -181,13 +193,14 @@ export const apiRequest = async <T>(
  * Clear cache for a specific endpoint or all cache
  */
 export const clearCache = (endpoint?: string) => {
-  if (endpoint) {
-    for (const key of cache.keys()) {
-      if (key.startsWith(endpoint)) {
-        cache.delete(key);
-      }
-    }
-  } else {
+  if (!endpoint) {
     cache.clear();
+    cacheEpoch += 1;
+    return;
+  }
+  for (const key of cache.keys()) {
+    if (key.includes(`:${endpoint}`) || key.includes(endpoint)) {
+      cache.delete(key);
+    }
   }
 };

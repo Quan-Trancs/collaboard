@@ -9,12 +9,12 @@ import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
-import { Plus, Search, LogOut, Loader2, Trash2 } from 'lucide-react';
+import { FolderKanban, LogOut, Loader2, Plus, Search, Trash2, Users } from 'lucide-react';
 import { boardApi } from '@/lib/api';
 import { ErrorHandler, handleAsyncError } from '@/lib/errorHandler';
 import { useToast } from '@/components/ui/use-toast';
 import { useAuth } from '@/contexts/AuthContext';
-import type { Board } from '@/types';
+import type { BoardPermission } from '@/types';
 
 interface BoardsListProps {
   user: { id: string; email: string; name: string };
@@ -30,8 +30,15 @@ interface LocalBoard {
   owner_id: string;
   thumbnail_url?: string;
   is_public: boolean;
+  permission?: BoardPermission;
   created_at: string;
   updated_at: string;
+}
+
+function permissionLabel(permission?: BoardPermission) {
+  if (permission === 'admin') return 'Admin';
+  if (permission === 'edit') return 'Can edit';
+  return 'Can view';
 }
 
 const BoardCard = React.memo<{
@@ -58,7 +65,11 @@ const BoardCard = React.memo<{
         <div className="flex items-start justify-between">
           <CardTitle className="text-lg pr-8">{board.title}</CardTitle>
           <div className="flex items-center gap-2">
-            {isOwner && <Badge variant="secondary">Owner</Badge>}
+            {isOwner ? (
+              <Badge variant="secondary">Owned</Badge>
+            ) : (
+              <Badge variant="outline">{permissionLabel(board.permission)}</Badge>
+            )}
             {board.is_public && <Badge variant="outline">Public</Badge>}
             {isOwner && (
               <Button
@@ -88,6 +99,49 @@ const BoardCard = React.memo<{
 
 BoardCard.displayName = 'BoardCard';
 
+const BoardSection = ({
+  title,
+  count,
+  icon: Icon,
+  emptyText,
+  boards,
+  onOpen,
+  onDelete,
+  isOwner,
+}: {
+  title: string;
+  count: number;
+  icon: React.ComponentType<{ className?: string }>;
+  emptyText: string;
+  boards: LocalBoard[];
+  onOpen: (id: string) => void;
+  onDelete: (id: string) => void;
+  isOwner: boolean;
+}) => (
+  <section aria-label={title} className="mb-8">
+    <div className="flex items-center gap-2 mb-3">
+      <Icon className="h-5 w-5 text-gray-600" />
+      <h2 className="text-lg font-semibold text-gray-900">{title}</h2>
+      <Badge variant="secondary">{count}</Badge>
+    </div>
+    {boards.length === 0 ? (
+      <p className="text-sm text-gray-500 py-6">{emptyText}</p>
+    ) : (
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+        {boards.map((board) => (
+          <BoardCard
+            key={board.id}
+            board={board}
+            onOpen={onOpen}
+            onDelete={onDelete}
+            isOwner={isOwner}
+          />
+        ))}
+      </div>
+    )}
+  </section>
+);
+
 const BoardsList: React.FC<BoardsListProps> = ({
   user,
   onCreateBoard,
@@ -109,6 +163,7 @@ const BoardsList: React.FC<BoardsListProps> = ({
       const fetchedBoards = await boardApi.getBoards();
       setBoards(fetchedBoards as LocalBoard[]);
     } catch (error) {
+      setBoards([]);
       handleAsyncError(() => Promise.reject(error), 'BoardsList.fetchBoards');
       toast({
         title: 'Error',
@@ -121,8 +176,9 @@ const BoardsList: React.FC<BoardsListProps> = ({
   }, [toast]);
 
   useEffect(() => {
+    setBoards([]);
     fetchBoards();
-  }, [fetchBoards]);
+  }, [user.id, fetchBoards]);
 
   const handleCreateBoard = useCallback(async () => {
     if (isCreating) return;
@@ -152,7 +208,10 @@ const BoardsList: React.FC<BoardsListProps> = ({
       );
 
       if (result?.data) {
-        await fetchBoards();
+        setBoards((prev) => {
+          if (prev.some((board) => board.id === result.data!.id)) return prev;
+          return [result.data as LocalBoard, ...prev];
+        });
         onCreateBoard(result.data.id);
       } else if (result?.error) {
         // Show error toast with specific message
@@ -181,6 +240,11 @@ const BoardsList: React.FC<BoardsListProps> = ({
     }
   }, [isCreating, onCreateBoard, fetchBoards, toast, authUser]);
 
+  const isOwner = useCallback(
+    (board: LocalBoard) => board.permission === 'owner' || board.owner_id === user.id,
+    [user.id]
+  );
+
   const filteredBoards = useMemo(() => {
     if (!searchQuery.trim()) return boards;
     const query = searchQuery.toLowerCase();
@@ -191,9 +255,13 @@ const BoardsList: React.FC<BoardsListProps> = ({
     );
   }, [boards, searchQuery]);
 
-  const isOwner = useCallback(
-    (board: LocalBoard) => board.owner_id === user.id,
-    [user.id]
+  const ownedBoards = useMemo(
+    () => filteredBoards.filter((board) => isOwner(board)),
+    [filteredBoards, isOwner]
+  );
+  const sharedBoards = useMemo(
+    () => filteredBoards.filter((board) => !isOwner(board)),
+    [filteredBoards, isOwner]
   );
 
   const handleDeleteClick = useCallback((boardId: string) => {
@@ -278,32 +346,42 @@ const BoardsList: React.FC<BoardsListProps> = ({
         </div>
       </div>
 
-      {/* Boards Grid */}
       <div className="flex-1 overflow-y-auto px-6 pb-6">
-        {filteredBoards.length === 0 ? (
+        {filteredBoards.length === 0 && boards.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-center">
-            <p className="text-lg text-gray-600 mb-4">
-              {searchQuery ? 'No boards found matching your search.' : "You don't have any boards yet."}
-            </p>
-            {!searchQuery && (
-              <Button onClick={handleCreateBoard} disabled={isCreating}>
-                <Plus className="h-4 w-4 mr-2" />
-                Create Your First Board
-              </Button>
-            )}
+            <p className="text-lg text-gray-600 mb-4">You don't have any boards yet.</p>
+            <Button onClick={handleCreateBoard} disabled={isCreating}>
+              <Plus className="h-4 w-4 mr-2" />
+              Create Your First Board
+            </Button>
+          </div>
+        ) : filteredBoards.length === 0 ? (
+          <div className="flex flex-col items-center justify-center h-full text-center">
+            <p className="text-lg text-gray-600">No boards found matching your search.</p>
           </div>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-            {filteredBoards.map((board) => (
-              <BoardCard
-                key={board.id}
-                board={board}
-                onOpen={onOpenBoard}
-                onDelete={handleDeleteClick}
-                isOwner={isOwner(board)}
-              />
-            ))}
-          </div>
+          <>
+            <BoardSection
+              title="Owned"
+              count={ownedBoards.length}
+              icon={FolderKanban}
+              emptyText={searchQuery ? 'No owned boards match this search.' : "You don't own any boards yet."}
+              boards={ownedBoards}
+              onOpen={onOpenBoard}
+              onDelete={handleDeleteClick}
+              isOwner
+            />
+            <BoardSection
+              title="Shared"
+              count={sharedBoards.length}
+              icon={Users}
+              emptyText={searchQuery ? 'No shared boards match this search.' : 'No boards have been shared with you.'}
+              boards={sharedBoards}
+              onOpen={onOpenBoard}
+              onDelete={handleDeleteClick}
+              isOwner={false}
+            />
+          </>
         )}
       </div>
 

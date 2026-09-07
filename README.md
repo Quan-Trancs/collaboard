@@ -7,9 +7,9 @@ A real-time collaborative whiteboard application built with React, TypeScript, a
 ## Features
 
 ### Real-time Collaboration
-- **Live Updates** - Real-time synchronization using WebSocket (Socket.IO)
-- **Live Cursor Tracking** - See where other collaborators are working
-- **Collaborative Editing** - Multiple users can edit simultaneously
+- **Live Updates** - Socket.IO stream; Redis holds the in-flight board, Mongo persists on commit
+- **Live Cursor Tracking** - Throttled ~20 Hz presence with client-side interpolation
+- **Collaborative Editing** - Preview while dragging or drawing; commit on mouseup, insert, paste, or delete
 - **Instant Sync** - Changes appear instantly across all connected clients
 
 ### Drawing & Editing Tools
@@ -27,7 +27,7 @@ A real-time collaborative whiteboard application built with React, TypeScript, a
 - **Team Sharing** - Share boards with team members
 - **Permissions Management** - Control access and editing permissions
 - **User Presence** - See who's currently viewing/editing
-- **Conflict Resolution** - Smart handling of simultaneous edits
+- **Last-write-wins on commit** - In-progress previews are not undo history; last committed patch wins
 
 ### User Experience
 - **Auto-save** - Automatic saving of your work
@@ -59,7 +59,8 @@ A real-time collaborative whiteboard application built with React, TypeScript, a
 - **Express** - Web application framework
 - **TypeScript** - Type-safe backend development
 - **Socket.IO** - Real-time WebSocket communication
-- **MongoDB** - NoSQL database
+- **MongoDB** - Durable store for users, boards, objects, and ink
+- **Redis** - Live board hashes and Socket.IO adapter
 - **Mongoose** - MongoDB object modeling
 - **JWT (jsonwebtoken)** - Token-based authentication
 - **bcryptjs** - Password hashing
@@ -85,8 +86,7 @@ A real-time collaborative whiteboard application built with React, TypeScript, a
 ### Prerequisites
 
 - Node.js 18+ and npm
-- MongoDB (local or MongoDB Atlas account)
-- Backend server running (for WebSocket features)
+- Docker Desktop (MongoDB + Redis)
 
 ### Installation
 
@@ -99,43 +99,36 @@ A real-time collaborative whiteboard application built with React, TypeScript, a
 2. **Install dependencies**
    ```bash
    npm install
+   cd backend && npm install && cd ..
    ```
 
 3. **Set up environment variables**
    ```bash
    cp env.example .env
-   cd backend
-   cp env.example .env
-   ```
-   
-   Edit `backend/.env` and add your MongoDB connection:
-   ```env
-   MONGODB_URI=mongodb://localhost:27017/collaboard
-   JWT_SECRET=your-secret-key-change-in-production
-   PORT=3001
-   CORS_ORIGIN=http://localhost:5173
-   ```
-   
-   Edit `.env` (frontend) and add:
-   ```env
-   VITE_API_URL=http://localhost:3001/api
-   VITE_SOCKET_URL=http://localhost:3001
+   cp backend/env.example backend/.env
    ```
 
-4. **Set up MongoDB**
-   - See [MongoDB Setup Guide](./docs/MONGODB_SETUP.md) for detailed instructions
-   - Use MongoDB Atlas (cloud) or install locally
+4. **Start development mode** (Mongo, Redis, API, and Vite)
 
-5. **Start the development server**
    ```bash
    npm run dev
    ```
 
-6. **Start the backend server** (in a separate terminal)
+   Open http://localhost:5173
+
+   Demo account (seeded automatically in development):
+
+   - Email: `slide@example.com`
+   - Password: `devpass123`
+
+   API health: http://localhost:3001/health
+
+   Run pieces separately if you need to:
+
    ```bash
-   cd backend
-   npm install
-   npm run dev
+   npm run db:up
+   npm run dev:api
+   npm run dev:web
    ```
 
 ## Project Structure
@@ -163,15 +156,20 @@ collaboard/
 
 ## Documentation
 
+- [Architecture topology](./docs/ARCHITECTURE.md) - Stream vs REST, Redis, Mongo, presence/commit
 - [MongoDB Setup Guide](./docs/MONGODB_SETUP.md) - Database setup instructions
-- [WebSocket Implementation](./docs/WEBSOCKET_IMPLEMENTATION.md) - Real-time collaboration details
+- [WebSocket Implementation](./docs/WEBSOCKET_IMPLEMENTATION.md) - Events, persistence, and client presence
 
 ## Available Scripts
 
-- `npm run dev` - Start development server
+- `npm run dev` - Development mode: Docker Mongo/Redis, API, and Vite
+- `npm run dev:web` - Frontend only
+- `npm run dev:api` - Backend only
+- `npm run db:up` / `npm run db:down` - Start/stop Mongo and Redis
 - `npm run build` - Build for production
 - `npm run preview` - Preview production build
 - `npm run lint` - Run ESLint
+- `npm test` - Run frontend tests
 
 ## Contributing
 

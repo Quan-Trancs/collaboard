@@ -4,11 +4,17 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "npm run db:up && concurrently -k -n api,web -c cyan,magenta \"npm run dev:api\" \"npm run dev:web\"",
+    "dev:web": "vite",
+    "dev:api": "npm --prefix backend run dev",
+    "db:up": "docker compose up -d --wait",
+    "db:down": "docker compose down",
     "build": "tsc --noEmit && vite build",
     "build-no-errors": "tsc --noEmit || vite build",
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.9.1",
@@ -68,6 +74,8 @@
     "@types/react-dom": "^18.3.5",
     "@vitejs/plugin-react-swc": "^3.9.1",
     "autoprefixer": "^10.4.20",
+    "concurrently": "^10.0.5",
+    "jsdom": "^29.1.1",
     "msw": "^2.7.0",
     "postcss": "^8.4.49",
     "tailwindcss": "^3.4.17",

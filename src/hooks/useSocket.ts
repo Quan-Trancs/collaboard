@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { io, Socket } from 'socket.io-client';
+import { compactElementPatch, createThrottle, CURSOR_INTERVAL_MS } from '@/lib/livePresence';
 
 interface UseSocketOptions {
   boardId: string;
@@ -9,6 +10,9 @@ interface UseSocketOptions {
 
 interface BoardState {
   elements: any[];
+  objects?: any[];
+  drawings?: any[];
+  viewport?: { x: number; y: number; zoom: number } | null;
   users: Array<{ userId: string; name: string; color: string }>;
   cursors: Array<{ socketId: string; userId: string; x: number; y: number; name: string; color: string }>;
 }
@@ -18,6 +22,7 @@ export const useSocket = ({ boardId, user, enabled = true }: UseSocketOptions) =
   const [isConnected, setIsConnected] = useState(false);
   const [boardState, setBoardState] = useState<BoardState | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const cursorThrottleRef = useRef(createThrottle(CURSOR_INTERVAL_MS));
 
   // Initialize socket connection
   useEffect(() => {
@@ -131,6 +136,11 @@ export const useSocket = ({ boardId, user, enabled = true }: UseSocketOptions) =
     });
 
     // Receive board state when joining
+    socket.on('join-error', (payload: { error?: string }) => {
+      setError(payload?.error || 'You do not have access to this board');
+      setIsConnected(false);
+    });
+
     socket.on('board-state', (state: BoardState) => {
       setBoardState(state);
     });
@@ -189,32 +199,29 @@ export const useSocket = ({ boardId, user, enabled = true }: UseSocketOptions) =
         
         socketRef.current = null;
       }
+      cursorThrottleRef.current.cancel();
       setIsConnected(false);
     };
   }, [boardId, user?.id, user?.name, user?.email, enabled]);
 
-  // Send cursor position
   const sendCursorMove = useCallback((x: number, y: number) => {
     if (!socketRef.current || !isConnected) return;
-    socketRef.current.emit('cursor-move', { 
-      boardId, 
-      x, 
-      y,
-      name: user.name,
-      color: `#${Math.floor(Math.random() * 16777215).toString(16)}`
+    const socket = socketRef.current;
+    cursorThrottleRef.current.schedule(() => {
+      socket.emit('cursor-move', { boardId, x, y });
     });
-  }, [boardId, isConnected, user.name]);
+  }, [boardId, isConnected]);
 
-  // Send drawing start
   const sendDrawingStart = useCallback((element: any) => {
     if (!socketRef.current || !isConnected) return;
     socketRef.current.emit('drawing-start', { boardId, element });
   }, [boardId, isConnected]);
 
-  // Send drawing update
-  const sendDrawingUpdate = useCallback((elementId: string, updates: any) => {
+  const sendDrawingUpdate = useCallback((elementId: string, updates: Record<string, unknown>) => {
     if (!socketRef.current || !isConnected) return;
-    socketRef.current.emit('drawing-update', { boardId, elementId, updates });
+    const patch = compactElementPatch(updates);
+    if (Object.keys(patch).length === 0) return;
+    socketRef.current.emit('drawing-update', { boardId, elementId, updates: patch });
   }, [boardId, isConnected]);
 
   // Send element delete
@@ -227,6 +234,26 @@ export const useSocket = ({ boardId, user, enabled = true }: UseSocketOptions) =
   const sendUndo = useCallback(() => {
     if (!socketRef.current || !isConnected) return;
     socketRef.current.emit('undo', { boardId });
+  }, [boardId, isConnected]);
+
+  const sendViewport = useCallback((viewport: { x: number; y: number; zoom: number }) => {
+    if (!socketRef.current || !isConnected) return;
+    socketRef.current.emit('viewport-update', { boardId, viewport });
+  }, [boardId, isConnected]);
+
+  const commitDrawing = useCallback(() => {
+    if (!socketRef.current || !isConnected) return;
+    socketRef.current.emit('drawing-commit', { boardId });
+  }, [boardId, isConnected]);
+
+  const flushBoard = useCallback(() => {
+    if (!socketRef.current || !isConnected) return;
+    socketRef.current.emit('flush-board', { boardId });
+  }, [boardId, isConnected]);
+
+  const clearBoard = useCallback(() => {
+    if (!socketRef.current || !isConnected) return;
+    socketRef.current.emit('clear-board', { boardId });
   }, [boardId, isConnected]);
 
   // Listen to real-time events - these are stable functions
@@ -270,6 +297,22 @@ export const useSocket = ({ boardId, user, enabled = true }: UseSocketOptions) =
     };
   }, [isConnected]);
 
+  const onBoardCleared = useCallback((callback: (data: any) => void) => {
+    if (!socketRef.current || !isConnected) return () => {};
+    socketRef.current.on('board-cleared', callback);
+    return () => {
+      socketRef.current?.off('board-cleared', callback);
+    };
+  }, [isConnected]);
+
+  const onUserLeft = useCallback((callback: (data: { userId: string; socketId: string }) => void) => {
+    if (!socketRef.current || !isConnected) return () => {};
+    socketRef.current.on('user-left', callback);
+    return () => {
+      socketRef.current?.off('user-left', callback);
+    };
+  }, [isConnected]);
+
   return {
     socket: socketRef.current,
     isConnected,
@@ -280,11 +323,17 @@ export const useSocket = ({ boardId, user, enabled = true }: UseSocketOptions) =
     sendDrawingUpdate,
     sendElementDelete,
     sendUndo,
+    sendViewport,
+    commitDrawing,
+    flushBoard,
+    clearBoard,
     onElementAdded,
     onElementUpdated,
     onElementDeleted,
     onUndoApplied,
     onCursorUpdate,
+    onBoardCleared,
+    onUserLeft,
   };
 };
 

@@ -1,22 +1,18 @@
 /**
  * API functions
- * 
+ *
  * Connects to the backend Express API with MongoDB
  * Uses enhanced API client with retry logic and caching
  */
 
-import { apiRequest, ApiError, clearCache } from './apiClient';
-import type { User, Board, BoardElement } from '@/types';
+import { apiRequest, clearCache } from './apiClient';
+import type { User, Board, BoardElement, SlideObject, InkStroke, BoardViewport, BoardBackground, BoardShareInfo, Collaborator } from '@/types';
 
-/**
- * User API functions
- */
 export const userApi = {
   async getCurrentUser(): Promise<User | null> {
     try {
       return await apiRequest<User>('/auth/me', { useCache: true, cacheTTL: 2 * 60 * 1000 });
     } catch (error) {
-      // Do not remove token on API failures - let user handle it explicitly
       return null;
     }
   },
@@ -26,32 +22,20 @@ export const userApi = {
       method: 'PUT',
       body: JSON.stringify(updates),
     });
-    // Clear user cache after update
     clearCache('/auth/me');
     return result;
   },
 };
 
-/**
- * Board API functions
- */
 export const boardApi = {
   async getBoards(): Promise<Board[]> {
-    try {
-      return await apiRequest<Board[]>('/boards', { 
-        useCache: true, 
-        cacheTTL: 30 * 1000 // 30 seconds cache
-      });
-    } catch (error) {
-      // Do not remove token on API failures - let user handle it explicitly
-      return [];
-    }
+    return await apiRequest<Board[]>('/boards');
   },
 
-  async getBoard(id: string): Promise<Board & { elements: BoardElement[] }> {
-    return await apiRequest<Board & { elements: BoardElement[] }>(`/boards/${id}`, {
+  async getBoard(id: string): Promise<Board & { objects: SlideObject[]; drawings: InkStroke[] }> {
+    return await apiRequest<Board & { objects: SlideObject[]; drawings: InkStroke[] }>(`/boards/${id}`, {
       useCache: true,
-      cacheTTL: 10 * 1000, // 10 seconds cache
+      cacheTTL: 10 * 1000,
     });
   },
 
@@ -60,17 +44,18 @@ export const boardApi = {
       method: 'POST',
       body: JSON.stringify(boardData),
     });
-    // Clear boards list cache
     clearCache('/boards');
     return result;
   },
 
-  async updateBoard(id: string, updates: Partial<Board>): Promise<Board> {
+  async updateBoard(
+    id: string,
+    updates: Partial<Board> & { viewport?: BoardViewport; background?: BoardBackground }
+  ): Promise<Board> {
     const result = await apiRequest<Board>(`/boards/${id}`, {
       method: 'PUT',
       body: JSON.stringify(updates),
     });
-    // Clear caches
     clearCache('/boards');
     clearCache(`/boards/${id}`);
     return result;
@@ -80,43 +65,139 @@ export const boardApi = {
     await apiRequest(`/boards/${id}`, {
       method: 'DELETE',
     });
-    // Clear caches
     clearCache('/boards');
     clearCache(`/boards/${id}`);
   },
 
-  async addCollaborator(boardId: string, email: string, permission: 'view' | 'edit' | 'admin' = 'view'): Promise<void> {
-    await apiRequest(`/boards/${boardId}/collaborators`, {
+  async getCollaborators(boardId: string): Promise<BoardShareInfo> {
+    return await apiRequest<BoardShareInfo>(`/boards/${boardId}/collaborators`);
+  },
+
+  async addCollaborator(boardId: string, email: string, permission: 'view' | 'edit' | 'admin' = 'view'): Promise<Collaborator> {
+    const result = await apiRequest<Collaborator>(`/boards/${boardId}/collaborators`, {
       method: 'POST',
       body: JSON.stringify({ email, permission }),
     });
-    // Clear board cache
+    clearCache('/boards');
     clearCache(`/boards/${boardId}`);
+    return result;
   },
 
   async removeCollaborator(boardId: string, userId: string): Promise<void> {
-    await apiRequest(`/boards/${userId}/collaborators/${userId}`, {
+    await apiRequest(`/boards/${boardId}/collaborators/${userId}`, {
       method: 'DELETE',
     });
-    // Clear board cache
-    clearCache(`/boards/${userId}`);
+    clearCache('/boards');
+    clearCache(`/boards/${boardId}`);
   },
 
-  async updateCollaboratorPermission(boardId: string, userId: string, permission: 'view' | 'edit' | 'admin'): Promise<void> {
-    // Use addCollaborator which upserts
-    await this.addCollaborator(boardId, '', permission);
+  async updateCollaboratorPermission(boardId: string, userId: string, permission: 'view' | 'edit' | 'admin'): Promise<Collaborator> {
+    const result = await apiRequest<Collaborator>(`/boards/${boardId}/collaborators/${userId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ permission }),
+    });
+    clearCache('/boards');
+    clearCache(`/boards/${boardId}`);
+    return result;
   },
 };
 
-/**
- * Board Elements API functions
- */
+export const objectApi = {
+  async getObjects(boardId: string): Promise<SlideObject[]> {
+    try {
+      return await apiRequest<SlideObject[]>(`/objects/board/${boardId}`, {
+        useCache: true,
+        cacheTTL: 5 * 1000,
+      });
+    } catch (error) {
+      return [];
+    }
+  },
+
+  async createObject(objectData: {
+    board_id: string;
+    type: SlideObject['type'];
+    transform: SlideObject['transform'];
+    zIndex?: number;
+    locked?: boolean;
+    visible?: boolean;
+    props?: Record<string, unknown>;
+  }): Promise<SlideObject> {
+    const result = await apiRequest<SlideObject>('/objects', {
+      method: 'POST',
+      body: JSON.stringify(objectData),
+    });
+    clearCache(`/objects/board/${objectData.board_id}`);
+    return result;
+  },
+
+  async updateObject(id: string, updates: Partial<Pick<SlideObject, 'transform' | 'zIndex' | 'locked' | 'visible' | 'props'>>, boardId?: string): Promise<SlideObject> {
+    const result = await apiRequest<SlideObject>(`/objects/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(updates),
+    });
+    if (boardId) clearCache(`/objects/board/${boardId}`);
+    return result;
+  },
+
+  async deleteObject(id: string, boardId?: string): Promise<void> {
+    await apiRequest(`/objects/${id}`, { method: 'DELETE' });
+    if (boardId) clearCache(`/objects/board/${boardId}`);
+  },
+};
+
+export const drawingApi = {
+  async getDrawings(boardId: string): Promise<InkStroke[]> {
+    try {
+      return await apiRequest<InkStroke[]>(`/drawings/board/${boardId}`, {
+        useCache: true,
+        cacheTTL: 5 * 1000,
+      });
+    } catch (error) {
+      return [];
+    }
+  },
+
+  async createStroke(stroke: {
+    board_id: string;
+    points: Array<{ x: number; y: number }>;
+    color: string;
+    strokeWidth: number;
+  }): Promise<InkStroke> {
+    const result = await apiRequest<InkStroke>('/drawings', {
+      method: 'POST',
+      body: JSON.stringify(stroke),
+    });
+    clearCache(`/drawings/board/${stroke.board_id}`);
+    return result;
+  },
+
+  async batchSave(boardId: string, strokes: Array<{
+    id?: string;
+    points: Array<{ x: number; y: number }>;
+    color: string;
+    strokeWidth: number;
+  }>): Promise<void> {
+    await apiRequest('/drawings/batch-save', {
+      method: 'POST',
+      body: JSON.stringify({ boardId, strokes }),
+    });
+    clearCache(`/drawings/board/${boardId}`);
+  },
+
+  async deleteStroke(id: string, boardId?: string): Promise<void> {
+    await apiRequest(`/drawings/${id}`, { method: 'DELETE' });
+    if (boardId) clearCache(`/drawings/board/${boardId}`);
+  },
+};
+
+/** Legacy mixed element API — prefers the adapter that writes SlideObject / InkStroke. */
 export const elementApi = {
   async getElements(boardId: string): Promise<BoardElement[]> {
     try {
       return await apiRequest<BoardElement[]>(`/elements/board/${boardId}`, {
         useCache: true,
-        cacheTTL: 5 * 1000, // 5 seconds cache for elements
+        cacheTTL: 5 * 1000,
       });
     } catch (error) {
       return [];
@@ -125,7 +206,7 @@ export const elementApi = {
 
   async createElement(elementData: {
     board_id: string;
-    type: 'drawing' | 'text' | 'shape' | 'image' | 'table' | 'chart' | 'icon';
+    type: BoardElement['type'];
     data: Record<string, any>;
     position: { x: number; y: number };
     size?: { width: number; height: number };
@@ -134,7 +215,6 @@ export const elementApi = {
       method: 'POST',
       body: JSON.stringify(elementData),
     });
-    // Clear elements cache for this board
     clearCache(`/elements/board/${elementData.board_id}`);
     return result;
   },
@@ -144,7 +224,6 @@ export const elementApi = {
       method: 'PUT',
       body: JSON.stringify(updates),
     });
-    // Clear elements cache if board_id is in updates
     if (updates.board_id) {
       clearCache(`/elements/board/${updates.board_id}`);
     }
@@ -155,14 +234,12 @@ export const elementApi = {
     await apiRequest(`/elements/${id}`, {
       method: 'DELETE',
     });
-    // Clear elements cache if boardId provided
     if (boardId) {
       clearCache(`/elements/board/${boardId}`);
     }
   },
 
   async batchUpdateElements(boardId: string, elements: Array<{ id: string; updates: Partial<BoardElement> }>): Promise<void> {
-    // Transform to batch-save format
     const batchElements = elements.map(({ id, updates }) => ({
       id,
       type: updates.type!,
@@ -178,17 +255,12 @@ export const elementApi = {
         elements: batchElements,
       }),
     });
-    // Clear elements cache
     clearCache(`/elements/board/${boardId}`);
   },
 };
 
-/**
- * Real-time subscription helpers (stubs - WebSocket handled by Socket.IO)
- */
 export const realtimeApi = {
   subscribeToBoard(boardId: string, callback: (payload: any) => void) {
-    // Real-time is handled by Socket.IO, not needed here
     return { unsubscribe: () => {} };
   },
 

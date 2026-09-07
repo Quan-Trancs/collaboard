@@ -10,6 +10,15 @@ export class ErrorHandler {
     // Handle ApiError with specific codes
     if (error instanceof Error && 'code' in error && 'status' in error) {
       const apiError = error as { code?: string; status: number; message: string };
+
+      if (apiError.status === 429 || apiError.code === 'RATE_LIMITED') {
+        return {
+          type: 'network',
+          message: 'Too many requests. Wait a minute and try again.',
+          originalError: error,
+          code: 'RATE_LIMITED',
+        };
+      }
       
       // Authentication error codes
       switch (apiError.code) {

@@ -1,0 +1,80 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 560" width="960" height="560" role="img" aria-labelledby="title desc">
+  <title id="title">Collaboard architecture topology</title>
+  <desc id="desc">Browser talks REST for auth and boards, and Socket.IO for drawing. Socket.IO writes Redis live state and flushes to MongoDB. Mongo hydrates Redis on join.</desc>
+  <rect width="960" height="560" fill="#f8f9fb"/>
+
+  <text x="32" y="36" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="18" font-weight="700" fill="#111827">Collaboard topology</text>
+  <text x="32" y="58" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="12" fill="#6b7280">Stream-first: Socket.IO for drawing, REST for auth and the board list</text>
+
+  <!-- Client lane -->
+  <rect x="32" y="80" width="896" height="88" rx="10" fill="#eef2f7"/>
+  <text x="48" y="102" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="11" font-weight="600" fill="#6b7280">CLIENT</text>
+  <rect x="360" y="112" width="240" height="40" rx="8" fill="#ffffff" stroke="#111827" stroke-width="1.5"/>
+  <text x="480" y="131" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="13" font-weight="600" fill="#111827">Browser  ·  localhost:5173</text>
+  <text x="480" y="146" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="10" fill="#6b7280">React whiteboard, JWT in localStorage</text>
+
+  <!-- Edge lane -->
+  <rect x="32" y="188" width="896" height="132" rx="10" fill="#eef2f7"/>
+  <text x="48" y="210" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="11" font-weight="600" fill="#6b7280">EDGE  ·  Express on :3001</text>
+  <rect x="160" y="232" width="220" height="60" rx="8" fill="#ffffff" stroke="#9ca3af" stroke-width="1.5"/>
+  <text x="270" y="256" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="14" font-weight="600" fill="#111827">REST /api</text>
+  <text x="270" y="274" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="11" fill="#6b7280">auth, boards, title</text>
+  <rect x="580" y="232" width="220" height="60" rx="8" fill="#111827"/>
+  <text x="690" y="256" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="14" font-weight="600" fill="#ffffff">Socket.IO</text>
+  <text x="690" y="274" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="11" fill="#d1d5db">draw, cursor, undo, flush</text>
+
+  <!-- Store lane -->
+  <rect x="32" y="340" width="896" height="132" rx="10" fill="#eef2f7"/>
+  <text x="48" y="362" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="11" font-weight="600" fill="#6b7280">STORES</text>
+  <rect x="160" y="384" width="220" height="60" rx="8" fill="#ffffff" stroke="#9ca3af" stroke-width="1.5"/>
+  <text x="270" y="408" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="14" font-weight="600" fill="#111827">MongoDB 7</text>
+  <text x="270" y="426" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="11" fill="#6b7280">durable source of truth</text>
+  <rect x="580" y="384" width="220" height="60" rx="8" fill="#ffffff" stroke="#111827" stroke-width="1.5"/>
+  <text x="690" y="408" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="14" font-weight="600" fill="#111827">Redis 7</text>
+  <text x="690" y="426" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="11" fill="#6b7280">live board hashes</text>
+
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#111827"/>
+    </marker>
+    <marker id="arrowMuted" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#6b7280"/>
+    </marker>
+  </defs>
+
+  <!-- Browser to REST -->
+  <path d="M 420 152 L 270 152 L 270 232" fill="none" stroke="#6b7280" stroke-width="1.5" marker-end="url(#arrowMuted)"/>
+  <text x="332" y="148" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="10" fill="#6b7280">REST</text>
+
+  <!-- Browser to Socket -->
+  <path d="M 540 152 L 690 152 L 690 232" fill="none" stroke="#111827" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="620" y="146" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="10" font-weight="600" fill="#111827">stream</text>
+
+  <!-- REST to Mongo -->
+  <path d="M 270 292 L 270 384" fill="none" stroke="#6b7280" stroke-width="1.5" marker-end="url(#arrowMuted)"/>
+  <text x="278" y="344" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="10" fill="#6b7280">CRUD</text>
+
+  <!-- Socket to Redis -->
+  <path d="M 690 292 L 690 384" fill="none" stroke="#111827" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="698" y="344" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="10" font-weight="600" fill="#111827">live write</text>
+
+  <!-- Socket to Mongo flush -->
+  <path d="M 580 262 L 400 262 L 400 414 L 380 414" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="408" y="300" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="10" fill="#111827">1.5s flush</text>
+
+  <!-- REST to Redis -->
+  <path d="M 380 262 L 560 262" fill="none" stroke="#6b7280" stroke-width="1.25" marker-end="url(#arrowMuted)"/>
+  <text x="430" y="254" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="10" fill="#6b7280">live upsert</text>
+
+  <!-- Mongo hydrate Redis -->
+  <path d="M 380 430 L 580 430" fill="none" stroke="#6b7280" stroke-width="1.25" stroke-dasharray="5 4" marker-end="url(#arrowMuted)"/>
+  <text x="430" y="448" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="10" fill="#6b7280">hydrate on join</text>
+
+  <!-- Redis board-state back -->
+  <path d="M 800 414 L 840 414 L 840 262 L 800 262" fill="none" stroke="#6b7280" stroke-width="1.25" stroke-dasharray="5 4" marker-end="url(#arrowMuted)"/>
+  <text x="848" y="344" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="10" fill="#6b7280">board-state</text>
+
+  <text x="32" y="500" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="11" fill="#111827">Solid black = live stream path. Gray = REST and store sync. Dashed = hydrate / board-state.</text>
+  <text x="32" y="520" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="11" fill="#6b7280">REST /api/objects and /api/drawings stay as a fallback when the socket is down.</text>
+  <text x="32" y="542" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="10" fill="#9ca3af">Source: Collaboard repo · 6 Sep 2026</text>
+</svg>

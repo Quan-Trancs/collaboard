@@ -2,11 +2,17 @@ import express, { Response } from 'express';
 import mongoose from 'mongoose';
 import { Board } from '../models/Board.js';
 import { BoardElement } from '../models/BoardElement.js';
+import { SlideObject } from '../models/SlideObject.js';
+import { InkStroke } from '../models/InkStroke.js';
 import { BoardCollaborator } from '../models/BoardCollaborator.js';
 import { User } from '../models/User.js';
 import { authenticate, AuthRequest } from '../middleware/auth.js';
 import { validate, schemas } from '../middleware/validation.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
+import { serializeBoard, serializeInkStroke, serializeSlideObject } from '../lib/serializers.js';
+import { migrateLegacyElements } from '../lib/migrateElements.js';
+import { clearBoardLiveState } from '../lib/boardState.js';
+import { listBoardPeople, serializePerson } from '../lib/boardAccess.js';
 
 const router = express.Router();
 
@@ -18,8 +24,11 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
   const userId = req.userId!;
 
   // Optimize: Use aggregation pipeline for better performance
-  const collaborations = await BoardCollaborator.find({ user_id: userId }).select('board_id');
+  const collaborations = await BoardCollaborator.find({ user_id: userId }).select('board_id permission');
   const boardIds = collaborations.map(c => c.board_id);
+  const permissionByBoard = new Map(
+    collaborations.map((collaboration) => [collaboration.board_id.toString(), collaboration.permission])
+  );
 
   // Single query with $or for better performance
   const boards = await Board.find({
@@ -38,17 +47,57 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
   );
 
   res.json(
-    uniqueBoards.map(board => ({
-      id: board._id.toString(),
-      title: board.title,
-      description: board.description,
-      owner_id: board.owner_id.toString(),
-      thumbnail_url: board.thumbnail_url,
-      is_public: board.is_public,
-      created_at: board.createdAt.toISOString(),
-      updated_at: board.updatedAt.toISOString(),
-    }))
+    uniqueBoards.map(board => {
+      const ownerId = board.owner_id.toString();
+      const isOwner = ownerId === userId;
+      return {
+        id: board._id.toString(),
+        title: board.title,
+        description: board.description,
+        owner_id: ownerId,
+        thumbnail_url: board.thumbnail_url,
+        is_public: board.is_public,
+        permission: isOwner ? 'owner' : permissionByBoard.get(board._id.toString()) || 'view',
+        created_at: board.createdAt.toISOString(),
+        updated_at: board.updatedAt.toISOString(),
+      };
+    })
   );
+}));
+
+// List people with access — registered before /:id so it cannot be swallowed
+router.get('/:id/collaborators', asyncHandler(async (req: AuthRequest, res: Response) => {
+  const boardId = req.params.id;
+  const userId = req.userId!;
+
+  if (!boardId || !mongoose.Types.ObjectId.isValid(boardId)) {
+    res.status(400).json({ error: 'Invalid board ID', code: 'INVALID_BOARD_ID' });
+    return;
+  }
+
+  const board = await Board.findById(boardId);
+  if (!board) {
+    res.status(404).json({ error: 'Board not found', code: 'BOARD_NOT_FOUND' });
+    return;
+  }
+
+  const isOwner = board.owner_id.toString() === userId;
+  const collaboration = await BoardCollaborator.findOne({
+    board_id: board._id,
+    user_id: userId,
+  });
+  if (!isOwner && !collaboration && !board.is_public) {
+    res.status(403).json({ error: 'Access denied', code: 'ACCESS_DENIED' });
+    return;
+  }
+
+  const people = await listBoardPeople(board);
+  res.json({
+    owner: people.owner,
+    collaborators: people.collaborators,
+    is_public: board.is_public,
+    can_manage: isOwner || collaboration?.permission === 'admin',
+  });
 }));
 
 // Get single board with elements
@@ -83,29 +132,23 @@ router.get('/:id', async (req: AuthRequest, res: Response) => {
       return;
     }
 
-    // Get elements
-    const elements = await BoardElement.find({ board_id: boardObjectId }).sort({ createdAt: 1 });
+    await migrateLegacyElements(boardId);
+    const [objects, drawings, people] = await Promise.all([
+      SlideObject.find({ board_id: boardObjectId }).sort({ zIndex: 1, createdAt: 1 }).lean(),
+      InkStroke.find({ board_id: boardObjectId }).sort({ createdAt: 1 }).lean(),
+      listBoardPeople(board),
+    ]);
+    const permission = isOwner ? 'owner' : collaboration?.permission || 'view';
+    const canEdit = isOwner || permission === 'edit' || permission === 'admin';
 
     res.json({
-      id: board._id.toString(),
-      title: board.title,
-      description: board.description,
-      owner_id: board.owner_id.toString(),
-      thumbnail_url: board.thumbnail_url,
-      is_public: board.is_public,
-      created_at: board.createdAt.toISOString(),
-      updated_at: board.updatedAt.toISOString(),
-      elements: elements.map(el => ({
-        id: el._id.toString(),
-        board_id: el.board_id.toString(),
-        type: el.type,
-        data: el.data,
-        position: el.position,
-        size: el.size,
-        created_by: el.created_by.toString(),
-        created_at: el.createdAt.toISOString(),
-        updated_at: el.updatedAt.toISOString(),
-      })),
+      ...serializeBoard(board),
+      permission,
+      can_edit: canEdit,
+      owner: people.owner,
+      collaborators: people.collaborators,
+      objects: objects.map(serializeSlideObject),
+      drawings: drawings.map(serializeInkStroke),
     });
   } catch (error: any) {
     res.status(500).json({ error: 'Failed to fetch board' });
@@ -124,16 +167,7 @@ router.post('/', validate(schemas.createBoard), asyncHandler(async (req: AuthReq
     is_public: is_public || false,
   });
 
-  res.status(201).json({
-    id: board._id.toString(),
-    title: board.title,
-    description: board.description,
-    owner_id: board.owner_id.toString(),
-    thumbnail_url: board.thumbnail_url,
-    is_public: board.is_public,
-    created_at: board.createdAt.toISOString(),
-    updated_at: board.updatedAt.toISOString(),
-  });
+  res.status(201).json(serializeBoard(board));
 }));
 
 // Update board
@@ -141,7 +175,7 @@ router.put('/:id', async (req: AuthRequest, res: Response) => {
   try {
     const boardId = req.params.id;
     const userId = req.userId!;
-    const { title, description, is_public } = req.body;
+    const { title, description, is_public, background, viewport } = req.body;
 
     if (!boardId || !mongoose.Types.ObjectId.isValid(boardId)) {
       res.status(400).json({ error: 'Invalid board ID' });
@@ -174,22 +208,15 @@ router.put('/:id', async (req: AuthRequest, res: Response) => {
     if (title !== undefined) updates.title = title;
     if (description !== undefined) updates.description = description;
     if (is_public !== undefined) updates.is_public = is_public;
+    if (background !== undefined) updates.background = background;
+    if (viewport !== undefined) updates.viewport = viewport;
 
     const updatedBoard = await Board.findByIdAndUpdate(boardObjectId, updates, {
       new: true,
       runValidators: true,
     });
 
-    res.json({
-      id: updatedBoard!._id.toString(),
-      title: updatedBoard!.title,
-      description: updatedBoard!.description,
-      owner_id: updatedBoard!.owner_id.toString(),
-      thumbnail_url: updatedBoard!.thumbnail_url,
-      is_public: updatedBoard!.is_public,
-      created_at: updatedBoard!.createdAt.toISOString(),
-      updated_at: updatedBoard!.updatedAt.toISOString(),
-    });
+    res.json(serializeBoard(updatedBoard!));
   } catch (error: any) {
     res.status(500).json({ error: 'Failed to update board' });
   }
@@ -223,7 +250,10 @@ router.delete('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
   await Promise.all([
     Board.findByIdAndDelete(boardObjectId),
     BoardElement.deleteMany({ board_id: boardObjectId }),
+    SlideObject.deleteMany({ board_id: boardObjectId }),
+    InkStroke.deleteMany({ board_id: boardObjectId }),
     BoardCollaborator.deleteMany({ board_id: boardObjectId }),
+    clearBoardLiveState(boardId),
   ]);
 
   res.json({ message: 'Board deleted successfully' });
@@ -243,7 +273,6 @@ router.post('/:id/collaborators', validate(schemas.addCollaborator), asyncHandle
   const boardObjectId = new mongoose.Types.ObjectId(boardId);
   const userObjectId = new mongoose.Types.ObjectId(userId);
 
-  // Check if user has permission to add collaborators
   const board = await Board.findById(boardObjectId);
   if (!board) {
     res.status(404).json({ error: 'Board not found', code: 'BOARD_NOT_FOUND' });
@@ -251,32 +280,88 @@ router.post('/:id/collaborators', validate(schemas.addCollaborator), asyncHandle
   }
 
   const isOwner = board.owner_id.toString() === userId;
-  const collaboration = await BoardCollaborator.findOne({
+  const manager = await BoardCollaborator.findOne({
     board_id: boardObjectId,
     user_id: userObjectId,
     permission: 'admin',
   });
 
-  if (!isOwner && !collaboration) {
-    res.status(403).json({ error: 'Access denied', code: 'ACCESS_DENIED' });
+  if (!isOwner && !manager) {
+    res.status(403).json({ error: 'Only the owner or an admin can invite people', code: 'ACCESS_DENIED' });
     return;
   }
 
-  // Find user by email
-  const collaboratorUser = await User.findOne({ email });
+  const collaboratorUser = await User.findOne({ email: String(email).toLowerCase().trim() });
   if (!collaboratorUser) {
-    res.status(404).json({ error: 'User not found', code: 'USER_NOT_FOUND' });
+    res.status(404).json({ error: 'No Collaboard account uses that email. They need to sign up first.', code: 'USER_NOT_FOUND' });
     return;
   }
 
-  // Add collaborator
+  if (collaboratorUser._id.toString() === userId) {
+    res.status(400).json({ error: 'You already have access to this board', code: 'CANNOT_INVITE_SELF' });
+    return;
+  }
+
+  if (collaboratorUser._id.toString() === board.owner_id.toString()) {
+    res.status(400).json({ error: 'The owner already has access', code: 'CANNOT_INVITE_OWNER' });
+    return;
+  }
+
   await BoardCollaborator.findOneAndUpdate(
     { board_id: boardObjectId, user_id: collaboratorUser._id },
     { permission },
     { upsert: true, new: true }
   );
 
-  res.json({ message: 'Collaborator added successfully' });
+  res.status(201).json(serializePerson(collaboratorUser, permission));
+}));
+
+router.patch('/:id/collaborators/:userId', validate(schemas.updateCollaborator), asyncHandler(async (req: AuthRequest, res: Response) => {
+  const boardId = req.params.id;
+  const userId = req.userId!;
+  const collaboratorUserId = req.params.userId;
+  const { permission } = req.body;
+
+  if (!boardId || !mongoose.Types.ObjectId.isValid(boardId) || !collaboratorUserId || !mongoose.Types.ObjectId.isValid(collaboratorUserId)) {
+    res.status(400).json({ error: 'Invalid board or user ID', code: 'INVALID_ID' });
+    return;
+  }
+
+  const board = await Board.findById(boardId);
+  if (!board) {
+    res.status(404).json({ error: 'Board not found', code: 'BOARD_NOT_FOUND' });
+    return;
+  }
+
+  const isOwner = board.owner_id.toString() === userId;
+  const manager = await BoardCollaborator.findOne({
+    board_id: board._id,
+    user_id: userId,
+    permission: 'admin',
+  });
+  if (!isOwner && !manager) {
+    res.status(403).json({ error: 'Only the owner or an admin can change permissions', code: 'ACCESS_DENIED' });
+    return;
+  }
+
+  if (collaboratorUserId === board.owner_id.toString()) {
+    res.status(400).json({ error: 'Cannot change the owner permission', code: 'CANNOT_CHANGE_OWNER' });
+    return;
+  }
+
+  const collaboratorUser = await User.findById(collaboratorUserId);
+  if (!collaboratorUser) {
+    res.status(404).json({ error: 'User not found', code: 'USER_NOT_FOUND' });
+    return;
+  }
+
+  await BoardCollaborator.findOneAndUpdate(
+    { board_id: board._id, user_id: collaboratorUser._id },
+    { permission },
+    { upsert: true, new: true }
+  );
+
+  res.json(serializePerson(collaboratorUser, permission));
 }));
 
 // Remove collaborator
@@ -306,8 +391,19 @@ router.delete('/:id/collaborators/:userId', asyncHandler(async (req: AuthRequest
   }
 
   const isOwner = board.owner_id.toString() === userId;
-  if (!isOwner) {
-    res.status(403).json({ error: 'Only owner can remove collaborators', code: 'ACCESS_DENIED' });
+  const isSelf = collaboratorUserId === userId;
+  const manager = await BoardCollaborator.findOne({
+    board_id: boardObjectId,
+    user_id: userId,
+    permission: 'admin',
+  });
+  if (!isOwner && !manager && !isSelf) {
+    res.status(403).json({ error: 'Only the owner or an admin can remove people', code: 'ACCESS_DENIED' });
+    return;
+  }
+
+  if (collaboratorUserId === board.owner_id.toString()) {
+    res.status(400).json({ error: 'Cannot remove the owner', code: 'CANNOT_REMOVE_OWNER' });
     return;
   }
 

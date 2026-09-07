@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Dialog,
   DialogContent,
@@ -11,447 +11,331 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
-import { Separator } from "@/components/ui/separator";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { Copy, Mail, Check } from "lucide-react";
+import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
+import { Copy, Mail, Check } from "lucide-react";
 import { boardApi } from "@/lib/api";
 import { ErrorHandler } from "@/lib/errorHandler";
 import { useToast } from "@/components/ui/use-toast";
-import { inviteCollaboratorSchema } from "@/lib/validation";
-import { validateAndToast } from "@/lib/validationUtils";
-import { Spinner, RetryButton, LoadingOverlay } from "@/components/ui/loading";
+import type { Collaborator } from "@/types";
 
 interface ShareModalProps {
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
   boardTitle?: string;
   boardId?: string;
+  currentUser?: { id: string; name: string; email: string };
+  onShareChange?: (info?: { owner: Collaborator | null; collaborators: Collaborator[] }) => void;
 }
 
-interface Collaborator {
-  id: string;
-  name: string;
-  email: string;
-  avatarUrl?: string;
-  permission: "view" | "edit";
+function personAvatar(person: Collaborator) {
+  return person.avatarUrl || person.avatar_url || `https://api.dicebear.com/7.x/avataaars/svg?seed=${person.name}`;
 }
 
-const ShareModal = ({
-  open = true,
+function permissionLabel(permission: Collaborator["permission"]) {
+  if (permission === "owner") return "Owner";
+  if (permission === "admin") return "Admin";
+  if (permission === "edit") return "Editor";
+  return "Viewer";
+}
+
+export default function ShareModal({
+  open = false,
   onOpenChange,
   boardTitle = "Untitled Board",
-  boardId = "123456",
-}: ShareModalProps) => {
-  const [permission, setPermission] = useState<"view" | "edit">("view");
+  boardId,
+  currentUser,
+  onShareChange,
+}: ShareModalProps) {
+  const [invitePermission, setInvitePermission] = useState<"view" | "edit">("edit");
   const [email, setEmail] = useState("");
   const [copied, setCopied] = useState(false);
+  const [owner, setOwner] = useState<Collaborator | null>(null);
   const [collaborators, setCollaborators] = useState<Collaborator[]>([]);
-  const [loading, setLoading] = useState(false); // Start as false, only set to true when fetching
-  const [error, setError] = useState<string | null>(null);
-  const [inviteError, setInviteError] = useState<string | null>(null);
-  const [updatePermissionError, setUpdatePermissionError] = useState<string | null>(null);
-  const [removeError, setRemoveError] = useState<string | null>(null);
+  const [isPublic, setIsPublic] = useState(false);
+  const [canManage, setCanManage] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
   const { toast } = useToast();
-  const [selectedCollaboratorId, setSelectedCollaboratorId] = useState<string | null>(null);
-  const [selectedPermission, setSelectedPermission] = useState<"view" | "edit" | null>(null);
-  const fetchingRef = useRef<boolean>(false);
-  const abortControllerRef = useRef<AbortController | null>(null);
 
-  // Helper to map database collaborator to Collaborator
-  function mapDatabaseCollaborator(c: any): Collaborator {
-    return {
-      id: c.user?.id || c.id || "",
-      name: c.user?.name || c.name || "Unknown",
-      email: c.user?.email || c.email || "",
-      avatarUrl: c.user?.avatar_url || `https://api.dicebear.com/7.x/avataaars/svg?seed=${c.user?.name || c.name || "user"}`,
-      permission: c.permission === "edit" ? "edit" : "view",
-    };
-  }
-  
-  // Fetch collaborators on mount/boardId change, but only when modal is open
+  const shareLink = useMemo(() => {
+    if (!boardId || typeof window === "undefined") return "";
+    return `${window.location.origin}/?boardId=${boardId}`;
+  }, [boardId]);
+
+  const applyInfo = (info: {
+    owner: Collaborator | null;
+    collaborators: Collaborator[];
+    is_public?: boolean;
+    can_manage?: boolean;
+  }) => {
+    setOwner(info.owner);
+    setCollaborators(info.collaborators || []);
+    if (typeof info.is_public === "boolean") setIsPublic(info.is_public);
+    if (typeof info.can_manage === "boolean") setCanManage(info.can_manage);
+    onShareChange?.(info);
+  };
+
+  const loadShare = async () => {
+    if (!boardId) return;
+    setLoading(true);
+    try {
+      const info = await boardApi.getCollaborators(boardId);
+      applyInfo(info);
+    } catch {
+      try {
+        const board = await boardApi.getBoard(boardId);
+        applyInfo({
+          owner: board.owner || (currentUser
+            ? { id: currentUser.id, name: currentUser.name, email: currentUser.email, permission: "owner" }
+            : null),
+          collaborators: board.collaborators || [],
+          is_public: board.is_public,
+          can_manage: board.permission === "owner" || board.permission === "admin",
+        });
+      } catch (error) {
+        if (currentUser) {
+          setOwner({ id: currentUser.id, name: currentUser.name, email: currentUser.email, permission: "owner" });
+        }
+        toast(ErrorHandler.getToastConfig(ErrorHandler.createError(error, "Loading sharing")));
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
   useEffect(() => {
-    // If modal is closed, reset loading state
-    if (!open) {
-      setLoading(false);
-      return;
+    if (open && boardId) {
+      loadShare();
     }
-    
-    // Only fetch when modal is open and boardId exists
-    if (!boardId) {
-      setLoading(false);
-      return;
-    }
-    
-    // Prevent concurrent fetches
-    if (fetchingRef.current) return;
-    
-    // Cancel any in-flight requests
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
-    }
-    
-    const abortController = new AbortController();
-    abortControllerRef.current = abortController;
-    fetchingRef.current = true;
-    
-    const fetchCollaborators = async () => {
-      setLoading(true);
-      try {
-        const board = await boardApi.getBoard(boardId);
-        
-        // If request was aborted, don't process
-        if (abortController.signal.aborted) {
-          setLoading(false);
-          return;
-        }
-        
-        const collaboratorsArray = (board && Array.isArray((board as any).collaborators)) ? (board as any).collaborators : [];
-        setCollaborators(collaboratorsArray.map(mapDatabaseCollaborator));
-        setError(null);
-      } catch (error: any) {
-        // Don't show error if request was aborted
-        if (abortController.signal.aborted || error?.name === 'AbortError') {
-          setLoading(false);
-          return;
-        }
-        
-        const appError = ErrorHandler.createError(error, "Fetching collaborators");
-        ErrorHandler.logError(appError, "Fetching collaborators");
-        toast(ErrorHandler.getToastConfig(appError));
-        setError(appError.message);
-      } finally {
-        if (!abortController.signal.aborted) {
-          setLoading(false);
-        }
-        fetchingRef.current = false;
-      }
-    };
-    
-    fetchCollaborators();
-    
-    // Cleanup function
-    return () => {
-      abortController.abort();
-      fetchingRef.current = false;
-      setLoading(false);
-    };
-  }, [boardId, open, toast]);
+  }, [open, boardId]);
 
-  const shareLink = `https://example.com/board/${boardId}?access=${permission}`;
-
-  const handleCopyLink = () => {
-    navigator.clipboard.writeText(shareLink);
-    setCopied(true);
-  };
-
-  // Invite collaborator
-  const handleInvite = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (email && boardId) {
-      setLoading(true);
-      setInviteError(null);
-      try {
-        // Validate invite data
-        const inviteData = {
-          boardId,
-          email,
-          permission,
-        };
-        const validated = validateAndToast(inviteCollaboratorSchema, inviteData, "Invite");
-        if (!validated) {
-          setLoading(false);
-          return;
-        }
-
-        await boardApi.addCollaborator(validated.boardId, validated.email, validated.permission);
-        
-        // Refetch collaborators
-        const board = await boardApi.getBoard(boardId);
-        const collaboratorsArray = (board && Array.isArray((board as any).collaborators)) ? (board as any).collaborators : [];
-        setCollaborators(collaboratorsArray.map(mapDatabaseCollaborator));
-        setEmail("");
-        
-        toast({
-          title: "Invitation sent",
-          description: `Invitation sent to ${validated.email}`,
-        });
-      } catch (error) {
-        const appError = ErrorHandler.createError(error, "Inviting collaborator");
-        ErrorHandler.logError(appError, "Inviting collaborator");
-        toast(ErrorHandler.getToastConfig(appError));
-        setInviteError(appError.message);
-      } finally {
-        setLoading(false);
-      }
-    }
-  };
-  // Update collaborator permission
-  const updateCollaboratorPermission = async (
-    id: string,
-    newPermission: "view" | "edit",
-  ) => {
-    if (boardId) {
-      setLoading(true);
-      setUpdatePermissionError(null);
-      setSelectedCollaboratorId(id);
-      setSelectedPermission(newPermission);
-      try {
-        await boardApi.updateCollaboratorPermission(boardId, id, newPermission);
-        // Refetch collaborators
-        const board = await boardApi.getBoard(boardId);
-        const collaboratorsArray = (board && Array.isArray((board as any).collaborators)) ? (board as any).collaborators : [];
-        setCollaborators(collaboratorsArray.map(mapDatabaseCollaborator));
-        
-        toast({
-          title: "Permission updated",
-          description: `Permission updated to ${newPermission}`,
-        });
-      } catch (error) {
-        const appError = ErrorHandler.createError(error, "Updating collaborator permission");
-        ErrorHandler.logError(appError, "Updating collaborator permission");
-        toast(ErrorHandler.getToastConfig(appError));
-        setUpdatePermissionError(appError.message);
-      } finally {
-        setLoading(false);
-      }
-    }
-  };
-  // Remove collaborator
-  const removeCollaborator = async (id: string) => {
-    if (boardId) {
-      setLoading(true);
-      setRemoveError(null);
-      setSelectedCollaboratorId(id);
-      setSelectedPermission(null); // No permission to revert to
-      try {
-        await boardApi.removeCollaborator(boardId, id);
-        // Refetch collaborators
-        const board = await boardApi.getBoard(boardId);
-        const collaboratorsArray = (board && Array.isArray((board as any).collaborators)) ? (board as any).collaborators : [];
-        setCollaborators(collaboratorsArray.map(mapDatabaseCollaborator));
-        
-        toast({
-          title: "Collaborator removed",
-          description: "Collaborator has been removed from the board",
-        });
-      } catch (error) {
-        const appError = ErrorHandler.createError(error, "Removing collaborator");
-        ErrorHandler.logError(appError, "Removing collaborator");
-        toast(ErrorHandler.getToastConfig(appError));
-        setRemoveError(appError.message);
-      } finally {
-        setLoading(false);
-      }
+  const handleCopyLink = async () => {
+    if (!shareLink) return;
+    try {
+      await navigator.clipboard.writeText(shareLink);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 2000);
+      toast({ title: "Link copied", description: "Anyone you invite, or anyone with the link if the board is public, can open it." });
+    } catch {
+      toast({ title: "Could not copy", description: shareLink, variant: "destructive" });
     }
   };
 
-  // Add error state UI
-  if (error && !loading) {
-    return (
-      <div className="flex items-center justify-center p-8">
-        <RetryButton
-          error={error}
-          onRetry={() => window.location.reload()}
-          isLoading={loading}
-        />
-      </div>
-    );
-  }
-  // Add loading state UI
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center p-8">
-        <Spinner size="lg" />
-      </div>
-    );
-  }
+  const handleInvite = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!boardId || !email.trim() || !canManage) return;
+    setSaving(true);
+    try {
+      const person = await boardApi.addCollaborator(boardId, email.trim(), invitePermission);
+      const next = [...collaborators.filter((item) => item.id !== person.id), person];
+      setCollaborators(next);
+      setEmail("");
+      onShareChange?.({ owner, collaborators: next });
+      toast({ title: "Access granted", description: `${person.email} can now open this board.` });
+    } catch (error) {
+      toast(ErrorHandler.getToastConfig(ErrorHandler.createError(error, "Inviting collaborator")));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handlePermission = async (id: string, permission: "view" | "edit") => {
+    if (!boardId || !canManage) return;
+    setSaving(true);
+    try {
+      const person = await boardApi.updateCollaboratorPermission(boardId, id, permission);
+      const next = collaborators.map((item) => (item.id === id ? person : item));
+      setCollaborators(next);
+      onShareChange?.({ owner, collaborators: next });
+      toast({ title: "Permission updated", description: `${person.name} is now a ${permissionLabel(permission).toLowerCase()}.` });
+    } catch (error) {
+      toast(ErrorHandler.getToastConfig(ErrorHandler.createError(error, "Updating permission")));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleRemove = async (id: string) => {
+    if (!boardId || !canManage) return;
+    setSaving(true);
+    try {
+      await boardApi.removeCollaborator(boardId, id);
+      const next = collaborators.filter((item) => item.id !== id);
+      setCollaborators(next);
+      onShareChange?.({ owner, collaborators: next });
+      toast({ title: "Access removed", description: "They will no longer see this board in Shared." });
+    } catch (error) {
+      toast(ErrorHandler.getToastConfig(ErrorHandler.createError(error, "Removing collaborator")));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handlePublic = async (next: boolean) => {
+    if (!boardId || !canManage) return;
+    const previous = isPublic;
+    setIsPublic(next);
+    setSaving(true);
+    try {
+      await boardApi.updateBoard(boardId, { is_public: next });
+      onShareChange?.();
+      toast({
+        title: next ? "Link sharing on" : "Link sharing off",
+        description: next
+          ? "Anyone signed in with this link can view the board."
+          : "Only invited people can open the board.",
+      });
+    } catch (error) {
+      setIsPublic(previous);
+      toast(ErrorHandler.getToastConfig(ErrorHandler.createError(error, "Updating link sharing")));
+    } finally {
+      setSaving(false);
+    }
+  };
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md bg-white">
+      <DialogContent className="sm:max-w-lg bg-white max-h-[85vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Share "{boardTitle}"</DialogTitle>
           <DialogDescription>
-            Invite others to collaborate on this whiteboard.
+            Invite people who already have a Collaboard account, or turn on a view link.
           </DialogDescription>
         </DialogHeader>
 
         <div className="flex flex-col space-y-4">
-          <div className="flex flex-col space-y-2">
-            <Label htmlFor="link-permission">Permission</Label>
-            <RadioGroup
-              id="link-permission"
-              value={permission}
-              onValueChange={(value) => setPermission(value as "view" | "edit")}
-              className="flex flex-col space-y-1"
-            >
-              <div className="flex items-center space-x-2">
-                <RadioGroupItem value="view" id="view" />
-                <Label htmlFor="view">Can view</Label>
-              </div>
-              <div className="flex items-center space-x-2">
-                <RadioGroupItem value="edit" id="edit" />
-                <Label htmlFor="edit">Can edit</Label>
-              </div>
-            </RadioGroup>
-          </div>
-
-          <div className="flex flex-col space-y-2">
-            <Label htmlFor="share-link">Share link</Label>
-            <div className="flex space-x-2">
-              <Input
-                id="share-link"
-                value={shareLink}
-                readOnly
-                className="flex-1"
-              />
-              <Button
-                type="button"
-                size="icon"
-                onClick={handleCopyLink}
-                className="flex-shrink-0"
-              >
-                {copied ? (
-                  <Check className="h-4 w-4" />
-                ) : (
-                  <Copy className="h-4 w-4" />
-                )}
-              </Button>
-            </div>
-          </div>
-
-          <form onSubmit={handleInvite} className="flex flex-col space-y-2">
-            <Label htmlFor="email-invite">Invite by email</Label>
-            <div className="flex space-x-2">
-              <Input
-                id="email-invite"
-                type="email"
-                placeholder="email@example.com"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                className="flex-1"
-              />
-              <Button type="submit" size="icon" className="flex-shrink-0">
-                <Mail className="h-4 w-4" />
-              </Button>
-            </div>
-          </form>
-
-          {collaborators.length > 0 && (
-            <>
-              <Separator />
-              <div className="flex flex-col space-y-2">
-                <Label>People with access</Label>
-                <div className="flex flex-col space-y-2">
-                  {collaborators.map((collaborator) => (
-                    <div
-                      key={collaborator.id}
-                      className="flex items-center justify-between"
-                    >
-                      <div className="flex items-center space-x-2">
-                        <Avatar>
-                          <AvatarImage src={collaborator.avatarUrl} />
-                          <AvatarFallback>
-                            {collaborator.name.charAt(0)}
-                          </AvatarFallback>
-                        </Avatar>
-                        <div>
-                          <p className="text-sm font-medium">
-                            {collaborator.name}
-                          </p>
-                          <p className="text-xs text-muted-foreground">
-                            {collaborator.email}
-                          </p>
-                        </div>
-                      </div>
-                      <div className="flex items-center space-x-2">
-                        <Badge
-                          variant={
-                            collaborator.permission === "edit"
-                              ? "default"
-                              : "secondary"
-                          }
-                        >
-                          {collaborator.permission === "edit"
-                            ? "Editor"
-                            : "Viewer"}
-                        </Badge>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => {
-                            const newPermission =
-                              collaborator.permission === "edit"
-                                ? "view"
-                                : "edit";
-                            updateCollaboratorPermission(
-                              collaborator.id,
-                              newPermission,
-                            );
-                          }}
-                        >
-                          {collaborator.permission === "edit"
-                            ? "Make viewer"
-                            : "Make editor"}
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => removeCollaborator(collaborator.id)}
-                        >
-                          Remove
-                        </Button>
+          <div className="flex flex-col space-y-2" aria-label="Collaborator list">
+            <Label>People with access</Label>
+            {loading ? (
+              <p className="text-sm text-muted-foreground">Loading people…</p>
+            ) : (
+              <div className="flex flex-col space-y-3 rounded-md border border-gray-200 p-3 max-h-64 overflow-y-auto">
+                {owner && (
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center space-x-2">
+                      <Avatar>
+                        <AvatarImage src={personAvatar(owner)} />
+                        <AvatarFallback>{owner.name.charAt(0)}</AvatarFallback>
+                      </Avatar>
+                      <div>
+                        <p className="text-sm font-medium">{owner.name}</p>
+                        <p className="text-xs text-muted-foreground">{owner.email}</p>
                       </div>
                     </div>
-                  ))}
-                </div>
+                    <Badge variant="secondary">Owner</Badge>
+                  </div>
+                )}
+                {collaborators.map((person) => (
+                  <div key={person.id} className="flex items-center justify-between gap-2">
+                    <div className="flex items-center space-x-2 min-w-0">
+                      <Avatar>
+                        <AvatarImage src={personAvatar(person)} />
+                        <AvatarFallback>{person.name.charAt(0)}</AvatarFallback>
+                      </Avatar>
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium truncate">{person.name}</p>
+                        <p className="text-xs text-muted-foreground truncate">{person.email}</p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-1 shrink-0">
+                      <Badge variant={person.permission === "view" ? "secondary" : "default"}>
+                        {permissionLabel(person.permission)}
+                      </Badge>
+                      {canManage && (
+                        <>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            disabled={saving}
+                            onClick={() => handlePermission(person.id, person.permission === "edit" ? "view" : "edit")}
+                          >
+                            {person.permission === "edit" ? "Make viewer" : "Make editor"}
+                          </Button>
+                          <Button variant="ghost" size="sm" disabled={saving} onClick={() => handleRemove(person.id)}>
+                            Remove
+                          </Button>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                ))}
+                {!loading && !owner && collaborators.length === 0 && (
+                  <p className="text-sm text-muted-foreground">No people loaded yet.</p>
+                )}
               </div>
-            </>
+            )}
+          </div>
+
+          <div className="flex items-center justify-between gap-3 rounded-md border border-gray-200 p-3">
+            <div>
+              <Label htmlFor="public-link">Anyone with the link</Label>
+              <p className="text-xs text-muted-foreground mt-1">
+                Signed-in users can view. They cannot edit unless you invite them.
+              </p>
+            </div>
+            <Switch
+              id="public-link"
+              checked={isPublic}
+              disabled={!canManage || saving || loading}
+              onCheckedChange={handlePublic}
+              aria-label="Anyone with the link can view"
+            />
+          </div>
+
+          <div className="flex flex-col space-y-2">
+            <Label htmlFor="share-link">Board link</Label>
+            <div className="flex space-x-2">
+              <Input id="share-link" value={shareLink} readOnly className="flex-1" />
+              <Button type="button" size="icon" onClick={handleCopyLink} aria-label="Copy board link">
+                {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+              </Button>
+            </div>
+          </div>
+
+          {canManage && (
+            <form onSubmit={handleInvite} className="flex flex-col space-y-2">
+              <Label htmlFor="email-invite">Invite by email</Label>
+              <RadioGroup
+                value={invitePermission}
+                onValueChange={(value) => setInvitePermission(value as "view" | "edit")}
+                className="flex gap-4"
+              >
+                <div className="flex items-center space-x-2">
+                  <RadioGroupItem value="view" id="invite-view" />
+                  <Label htmlFor="invite-view">Can view</Label>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <RadioGroupItem value="edit" id="invite-edit" />
+                  <Label htmlFor="invite-edit">Can edit</Label>
+                </div>
+              </RadioGroup>
+              <div className="flex space-x-2">
+                <Input
+                  id="email-invite"
+                  type="email"
+                  placeholder="teammate@example.com"
+                  value={email}
+                  onChange={(event) => setEmail(event.target.value)}
+                  className="flex-1"
+                  required
+                />
+                <Button type="submit" disabled={saving || !email.trim()} aria-label="Send invite">
+                  <Mail className="h-4 w-4" />
+                </Button>
+              </div>
+            </form>
           )}
+
         </div>
 
         <DialogFooter className="sm:justify-start">
-          <Button
-            type="button"
-            variant="secondary"
-            onClick={() => onOpenChange?.(false)}
-          >
+          <Button type="button" variant="secondary" onClick={() => onOpenChange?.(false)}>
             Done
           </Button>
         </DialogFooter>
-        <LoadingOverlay isVisible={loading} message="Processing..." />
-        {/* Error overlays for async actions */}
-        {inviteError && (
-          <div className="fixed top-4 right-4 z-50">
-            <RetryButton
-              error={inviteError}
-              onRetry={() => handleInvite({ preventDefault: () => {} } as React.FormEvent)}
-              isLoading={loading}
-            />
-          </div>
-        )}
-        {updatePermissionError && selectedCollaboratorId && selectedPermission && (
-          <div className="fixed top-4 right-4 z-50">
-            <RetryButton
-              error={updatePermissionError}
-              onRetry={() => updateCollaboratorPermission(selectedCollaboratorId, selectedPermission)}
-              isLoading={loading}
-            />
-          </div>
-        )}
-        {removeError && selectedCollaboratorId && (
-          <div className="fixed top-4 right-4 z-50">
-            <RetryButton
-              error={removeError}
-              onRetry={() => removeCollaborator(selectedCollaboratorId)}
-              isLoading={loading}
-            />
-          </div>
-        )}
       </DialogContent>
     </Dialog>
   );
-};
-
-export default ShareModal;
+}

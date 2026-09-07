@@ -15,6 +15,35 @@ export type User = {
   };
 };
 
+export type BoardViewport = {
+  x: number;
+  y: number;
+  zoom: number;
+};
+
+export type BoardBackground = {
+  color?: string;
+  image?: string | null;
+};
+
+export type BoardPermission = 'owner' | 'view' | 'edit' | 'admin';
+
+export type Collaborator = {
+  id: string;
+  name: string;
+  email: string;
+  avatarUrl?: string | null;
+  avatar_url?: string | null;
+  permission: BoardPermission;
+};
+
+export type BoardShareInfo = {
+  owner: Collaborator | null;
+  collaborators: Collaborator[];
+  is_public: boolean;
+  can_manage: boolean;
+};
+
 export type Board = {
   id: string;
   title: string;
@@ -22,12 +51,56 @@ export type Board = {
   owner_id: string;
   thumbnail_url?: string | null;
   is_public: boolean;
+  permission?: BoardPermission;
+  can_edit?: boolean;
+  owner?: Collaborator | null;
+  collaborators?: Collaborator[];
+  background?: BoardBackground;
+  viewport?: BoardViewport;
+  objects?: SlideObject[];
+  drawings?: InkStroke[];
   created_at: string;
   updated_at: string;
 };
 
-export type BoardElementType = 'drawing' | 'text' | 'shape' | 'image' | 'table' | 'chart' | 'icon';
+export type SlideObjectType = 'text' | 'shape' | 'image' | 'table' | 'chart' | 'icon';
 
+export type SlideObject = {
+  id: string;
+  board_id: string;
+  type: SlideObjectType;
+  transform: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    rotation: number;
+  };
+  zIndex: number;
+  locked: boolean;
+  visible: boolean;
+  props: Record<string, unknown>;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type InkStroke = {
+  id: string;
+  board_id: string;
+  type: 'drawing';
+  points: Array<{ x: number; y: number }>;
+  color: string;
+  strokeWidth: number;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+};
+
+/** @deprecated Use SlideObject or InkStroke */
+export type BoardElementType = 'drawing' | SlideObjectType;
+
+/** @deprecated Use SlideObject or InkStroke */
 export type BoardElement = {
   id: string;
   board_id: string;
@@ -40,15 +113,7 @@ export type BoardElement = {
   updated_at: string;
 };
 
-export type Collaborator = {
-  id: string;
-  name: string;
-  email: string;
-  avatarUrl?: string | null;
-  permission: 'view' | 'edit' | 'admin';
-};
-
-export type Tool = 'pen' | 'rectangle' | 'circle' | 'text' | 'eraser' | 'select';
+export type Tool = 'pen' | 'rectangle' | 'circle' | 'text' | 'eraser' | 'select' | 'shape';
 
 export interface DrawingElement {
   id: string;
@@ -73,6 +138,14 @@ export interface DrawingElement {
   cols?: number;
   chartType?: string;
   colors?: string[];
+  fontSize?: number;
+  fontFamily?: string;
+  bold?: boolean;
+  italic?: boolean;
+  underline?: boolean;
+  strikethrough?: boolean;
+  align?: 'left' | 'center' | 'right';
+  lineHeight?: number;
 }
 
 export type ApiResponse<T> = {
@@ -81,4 +154,3 @@ export type ApiResponse<T> = {
   code?: string;
   details?: unknown;
 };
-

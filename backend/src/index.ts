@@ -1,20 +1,16 @@
-// CRITICAL: Load environment variables FIRST before any other imports
-// This must happen before routes are imported, as they read process.env at module load time
 import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { existsSync } from 'fs';
 
-// Get current directory (ES modules compatible)
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Load environment variables - try multiple locations to find .env file
 const possiblePaths = [
-  path.resolve(process.cwd(), '.env'), // Current working directory (backend/)
-  path.resolve(__dirname, '../.env'), // One level up from src/ (backend/.env)
-  path.resolve(__dirname, '../../.env'), // Two levels up (root/.env)
-  path.join(process.cwd(), 'backend', '.env'), // Explicit backend/.env
+  path.resolve(process.cwd(), '.env'),
+  path.resolve(__dirname, '../.env'),
+  path.resolve(__dirname, '../../.env'),
+  path.join(process.cwd(), 'backend', '.env'),
 ];
 
 let envLoaded = false;
@@ -28,12 +24,10 @@ for (const envPath of possiblePaths) {
   }
 }
 
-// Fallback to default location if none found
 if (!envLoaded) {
   dotenv.config();
 }
 
-// NOW import other modules after .env is loaded
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
@@ -42,15 +36,37 @@ import morgan from 'morgan';
 import { createServer } from 'http';
 import { Server, Socket } from 'socket.io';
 import rateLimit from 'express-rate-limit';
-import { connectDatabase } from './config/database.js';
-
-// Connect to MongoDB
-connectDatabase();
+import { createAdapter } from '@socket.io/redis-adapter';
+import { connectDatabase, isMongoReady } from './config/database.js';
+import { connectRedis, createRedisClient, isRedisReady } from './config/redis.js';
+import authRoutes from './routes/auth.js';
+import boardRoutes from './routes/boards.js';
+import elementRoutes from './routes/elements.js';
+import objectRoutes from './routes/objects.js';
+import drawingRoutes from './routes/drawings.js';
+import { errorHandler } from './middleware/errorHandler.js';
+import { migrateLegacyElements } from './lib/migrateElements.js';
+import {
+  getLiveBoardState,
+  setUser,
+  removeUser,
+  upsertLiveItem,
+  deleteLiveItem,
+  getLiveItem,
+  popHistory,
+  restoreLiveItem,
+  syncLiveItems,
+  setLiveViewport,
+  scheduleBoardFlush,
+  flushBoardNow,
+  clearBoardLiveItems,
+} from './lib/boardState.js';
+import { isInHardWorld } from './lib/canvasBounds.js';
+import { getBoardAccess } from './lib/boardAccess.js';
+import { seedDevelopmentUser } from './lib/devSeed.js';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
-
-// Create HTTP server and Socket.IO instance
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
   cors: {
@@ -61,36 +77,6 @@ const io = new Server(httpServer, {
   transports: ['websocket', 'polling'],
 });
 
-// In-memory storage for real-time collaboration
-interface BoardState {
-  elements: Map<string, any>;
-  history: Array<{
-    id: string;
-    action: 'add' | 'update' | 'delete';
-    element: any;
-    userId: string;
-    timestamp: number;
-  }>;
-  cursors: Map<string, { userId: string; x: number; y: number; name: string; color: string }>;
-  users: Map<string, { userId: string; name: string; color: string }>;
-}
-
-const boardStates = new Map<string, BoardState>();
-
-// Helper to get or create board state
-function getBoardState(boardId: string): BoardState {
-  if (!boardStates.has(boardId)) {
-    boardStates.set(boardId, {
-      elements: new Map(),
-      history: [],
-      cursors: new Map(),
-      users: new Map(),
-    });
-  }
-  return boardStates.get(boardId)!;
-}
-
-// Middleware
 app.use(helmet());
 app.use(compression());
 app.use(morgan('dev'));
@@ -98,116 +84,120 @@ app.use(cors({
   origin: process.env.CORS_ORIGIN || 'http://localhost:5173',
   credentials: true,
 }));
-app.use(express.json());
+app.use(express.json({ limit: '5mb' }));
 app.use(express.urlencoded({ extended: true }));
 
-// Rate limiting - more lenient in development
-const isDevelopment = process.env.NODE_ENV === 'development';
-const limiter = rateLimit({
-  windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS || '900000', 10),
-  max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || (isDevelopment ? '500' : '100'), 10),
-  standardHeaders: true,
-  legacyHeaders: false,
-});
-app.use('/api/', limiter);
+const isProduction = process.env.NODE_ENV === 'production';
+const rateLimitEnabled =
+  process.env.RATE_LIMIT_ENABLED === 'true' ||
+  (isProduction && process.env.RATE_LIMIT_ENABLED !== 'false');
 
-// Health check endpoint
+if (rateLimitEnabled) {
+  app.use('/api/', rateLimit({
+    windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS || '900000', 10),
+    max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || (isProduction ? '1000' : '5000'), 10),
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: {
+      error: 'Too many requests. Wait a minute and try again.',
+      code: 'RATE_LIMITED',
+    },
+  }));
+}
+
 app.get('/health', (req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+  const mongo = isMongoReady();
+  const redis = isRedisReady();
+  res.status(mongo && redis ? 200 : 503).json({
+    status: mongo && redis ? 'ok' : 'degraded',
+    mongo,
+    redis,
+    timestamp: new Date().toISOString(),
+  });
 });
 
-// Import routes AFTER .env is loaded
-import authRoutes from './routes/auth.js';
-import boardRoutes from './routes/boards.js';
-import elementRoutes from './routes/elements.js';
-
-// API routes
 app.get('/api', (req, res) => {
   res.json({ message: 'Collaboard API is running' });
 });
 
-// Mount routes
 app.use('/api/auth', authRoutes);
 app.use('/api/boards', boardRoutes);
 app.use('/api/elements', elementRoutes);
+app.use('/api/objects', objectRoutes);
+app.use('/api/drawings', drawingRoutes);
 
-// Socket.IO connection handling
 io.on('connection', (socket: Socket) => {
   let currentBoardId: string | null = null;
   let currentUser: { userId: string; name: string; color: string } | null = null;
+  let canEditBoard = false;
 
-  socket.on('disconnect', () => {
+  socket.on('disconnect', async () => {
     if (currentBoardId && currentUser) {
-      const boardState = getBoardState(currentBoardId);
-      boardState.cursors.delete(socket.id);
-      boardState.users.delete(socket.id);
-      
-      // Notify others that user left
-      socket.to(`board-${currentBoardId}`).emit('user-left', {
-        userId: currentUser.userId,
+      const leavingBoardId = currentBoardId;
+      const leavingUserId = currentUser.userId;
+      await removeUser(leavingBoardId, socket.id);
+      socket.to(`board-${leavingBoardId}`).emit('user-left', {
+        userId: leavingUserId,
         socketId: socket.id,
       });
+      await flushBoardNow(leavingBoardId, leavingUserId);
     }
   });
 
-  // Join board with user info
-  socket.on('join-board', (data: { boardId: string; user: { id: string; name: string; email: string } }) => {
+  socket.on('join-board', async (data: { boardId: string; user: { id: string; name: string; email: string } }) => {
+    const access = await getBoardAccess(data.boardId, data.user.id);
+    if (access.error) {
+      socket.emit('join-error', access.error.body);
+      return;
+    }
+
     currentBoardId = data.boardId;
     currentUser = {
       userId: data.user.id,
       name: data.user.name,
       color: `#${Math.floor(Math.random() * 16777215).toString(16)}`,
     };
+    canEditBoard = Boolean(access.canEdit);
 
     socket.join(`board-${data.boardId}`);
-    const boardState = getBoardState(data.boardId);
-    boardState.users.set(socket.id, currentUser);
+    await setUser(data.boardId, socket.id, currentUser);
+    const state = await getLiveBoardState(data.boardId);
 
-    // Send current board state to new user
     socket.emit('board-state', {
-      elements: Array.from(boardState.elements.values()),
-      users: Array.from(boardState.users.values()),
-      cursors: Array.from(boardState.cursors.values()),
+      objects: state.objects,
+      drawings: state.drawings,
+      users: state.users,
+      cursors: state.cursors,
+      viewport: state.viewport,
+      elements: [...state.objects, ...state.drawings],
     });
 
-    // Notify others that user joined
     socket.to(`board-${data.boardId}`).emit('user-joined', {
       user: currentUser,
       socketId: socket.id,
     });
   });
 
-  socket.on('leave-board', () => {
+  socket.on('leave-board', async () => {
     if (currentBoardId && currentUser) {
-      const boardState = getBoardState(currentBoardId);
-      boardState.cursors.delete(socket.id);
-      boardState.users.delete(socket.id);
-      
-      socket.to(`board-${currentBoardId}`).emit('user-left', {
-        userId: currentUser.userId,
+      const leavingBoardId = currentBoardId;
+      const leavingUserId = currentUser.userId;
+      await removeUser(leavingBoardId, socket.id);
+      socket.to(`board-${leavingBoardId}`).emit('user-left', {
+        userId: leavingUserId,
         socketId: socket.id,
       });
-      
-      socket.leave(`board-${currentBoardId}`);
+      socket.leave(`board-${leavingBoardId}`);
       currentBoardId = null;
       currentUser = null;
+      await flushBoardNow(leavingBoardId, leavingUserId);
     }
   });
 
-  // Cursor tracking
   socket.on('cursor-move', (data: { boardId: string; x: number; y: number }) => {
     if (!currentBoardId || !currentUser) return;
-    
-    const boardState = getBoardState(data.boardId);
-    boardState.cursors.set(socket.id, {
-      userId: currentUser.userId,
-      x: data.x,
-      y: data.y,
-      name: currentUser.name,
-      color: currentUser.color,
-    });
+    if (!isInHardWorld(data.x, data.y)) return;
 
-    // Broadcast cursor position to others (throttled by client)
     socket.to(`board-${data.boardId}`).emit('cursor-update', {
       socketId: socket.id,
       userId: currentUser.userId,
@@ -218,115 +208,76 @@ io.on('connection', (socket: Socket) => {
     });
   });
 
-  // Drawing events
-  socket.on('drawing-start', (data: { boardId: string; element: any }) => {
-    if (!currentBoardId) return;
-    
-    const boardState = getBoardState(data.boardId);
-    boardState.elements.set(data.element.id, data.element);
-    
-    // Add to history
-    boardState.history.push({
-      id: Date.now().toString(),
-      action: 'add',
-      element: data.element,
-      userId: currentUser?.userId || '',
-      timestamp: Date.now(),
-    });
+  socket.on('drawing-start', async (data: { boardId: string; element: any }) => {
+    if (!currentBoardId || !canEditBoard) return;
+    const accepted = await upsertLiveItem(
+      data.boardId,
+      data.element,
+      'add',
+      currentUser?.userId || ''
+    );
+    if (!accepted) return;
 
-    // Keep last 200 actions
-    if (boardState.history.length > 200) {
-      boardState.history.shift();
-    }
-
-    // Broadcast to others
     socket.to(`board-${data.boardId}`).emit('element-added', {
       element: data.element,
       userId: currentUser?.userId,
     });
   });
 
-  socket.on('drawing-update', (data: { boardId: string; elementId: string; updates: any }) => {
-    if (!currentBoardId) return;
-    
-    const boardState = getBoardState(data.boardId);
-    const existingElement = boardState.elements.get(data.elementId);
-    
-    if (existingElement) {
-      const updatedElement = { ...existingElement, ...data.updates };
-      boardState.elements.set(data.elementId, updatedElement);
-      
-      // Add to history
-      boardState.history.push({
-        id: Date.now().toString(),
-        action: 'update',
-        element: updatedElement,
-        userId: currentUser?.userId || '',
-        timestamp: Date.now(),
-      });
+  socket.on('drawing-update', async (data: { boardId: string; elementId: string; updates: any }) => {
+    if (!currentBoardId || !canEditBoard) return;
+    const existing = await getLiveItem(data.boardId, data.elementId);
+    if (!existing) return;
 
-      // Broadcast to others
-      socket.to(`board-${data.boardId}`).emit('element-updated', {
-        elementId: data.elementId,
-        updates: data.updates,
-        userId: currentUser?.userId,
-      });
-    }
+    const updatedElement = { ...existing, ...data.updates };
+    const accepted = await upsertLiveItem(
+      data.boardId,
+      updatedElement,
+      'update',
+      currentUser?.userId || '',
+      { history: false }
+    );
+    if (!accepted) return;
+
+    socket.to(`board-${data.boardId}`).emit('element-updated', {
+      elementId: data.elementId,
+      updates: data.updates,
+      userId: currentUser?.userId,
+    });
   });
 
-  socket.on('element-delete', (data: { boardId: string; elementId: string }) => {
-    if (!currentBoardId) return;
-    
-    const boardState = getBoardState(data.boardId);
-    const element = boardState.elements.get(data.elementId);
-    
-    if (element) {
-      boardState.elements.delete(data.elementId);
-      
-      // Add to history
-      boardState.history.push({
-        id: Date.now().toString(),
-        action: 'delete',
-        element: element,
-        userId: currentUser?.userId || '',
-        timestamp: Date.now(),
-      });
+  socket.on('element-delete', async (data: { boardId: string; elementId: string }) => {
+    if (!currentBoardId || !canEditBoard) return;
+    const deleted = await deleteLiveItem(data.boardId, data.elementId, currentUser?.userId || '');
+    if (!deleted) return;
 
-      // Broadcast to others
-      socket.to(`board-${data.boardId}`).emit('element-deleted', {
-        elementId: data.elementId,
-        userId: currentUser?.userId,
-      });
-    }
+    scheduleBoardFlush(data.boardId, currentUser?.userId);
+    socket.to(`board-${data.boardId}`).emit('element-deleted', {
+      elementId: data.elementId,
+      userId: currentUser?.userId,
+    });
   });
 
-  // Undo/Redo
-  socket.on('undo', (data: { boardId: string }) => {
-    if (!currentBoardId) return;
-    
-    const boardState = getBoardState(data.boardId);
-    if (boardState.history.length === 0) return;
-
-    const lastAction = boardState.history.pop();
+  socket.on('undo', async (data: { boardId: string }) => {
+    if (!currentBoardId || !canEditBoard) return;
+    const lastAction = await popHistory(data.boardId);
     if (!lastAction) return;
 
-    // Apply inverse operation
     if (lastAction.action === 'add') {
-      boardState.elements.delete(lastAction.element.id);
+      await deleteLiveItem(data.boardId, lastAction.element.id, currentUser?.userId || '');
       socket.to(`board-${data.boardId}`).emit('undo-applied', {
         action: 'delete',
         elementId: lastAction.element.id,
         userId: currentUser?.userId,
       });
     } else if (lastAction.action === 'delete') {
-      boardState.elements.set(lastAction.element.id, lastAction.element);
+      await restoreLiveItem(data.boardId, lastAction.element);
       socket.to(`board-${data.boardId}`).emit('undo-applied', {
         action: 'add',
         element: lastAction.element,
         userId: currentUser?.userId,
       });
     } else if (lastAction.action === 'update') {
-      // For updates, we'd need to store previous state - simplified here
       socket.to(`board-${data.boardId}`).emit('undo-applied', {
         action: 'update',
         elementId: lastAction.element.id,
@@ -336,27 +287,59 @@ io.on('connection', (socket: Socket) => {
     }
   });
 
-  // Batch element updates (for persistence sync)
-  socket.on('sync-elements', (data: { boardId: string; elements: any[] }) => {
-    // This is for syncing from database, not broadcasting
-    const boardState = getBoardState(data.boardId);
-    data.elements.forEach((element) => {
-      boardState.elements.set(element.id, element);
+  socket.on('sync-elements', async (data: { boardId: string; elements: any[] }) => {
+    if (!canEditBoard) return;
+    await syncLiveItems(data.boardId, data.elements);
+    scheduleBoardFlush(data.boardId, currentUser?.userId);
+  });
+
+  socket.on('viewport-update', async (data: { boardId: string; viewport: { x: number; y: number; zoom: number } }) => {
+    if (!currentBoardId || data.boardId !== currentBoardId) return;
+    await setLiveViewport(data.boardId, data.viewport);
+  });
+
+  socket.on('drawing-commit', async (data: { boardId: string }) => {
+    if (!currentBoardId || data.boardId !== currentBoardId) return;
+    scheduleBoardFlush(data.boardId, currentUser?.userId);
+  });
+
+  socket.on('flush-board', async (data: { boardId: string }) => {
+    if (!currentBoardId || data.boardId !== currentBoardId) return;
+    await flushBoardNow(data.boardId, currentUser?.userId);
+    socket.emit('board-flushed', { boardId: data.boardId });
+  });
+
+  socket.on('clear-board', async (data: { boardId: string }) => {
+    if (!currentBoardId || data.boardId !== currentBoardId || !canEditBoard) return;
+    await clearBoardLiveItems(data.boardId);
+    await flushBoardNow(data.boardId, currentUser?.userId);
+    socket.to(`board-${data.boardId}`).emit('board-cleared', {
+      userId: currentUser?.userId,
     });
   });
 });
 
-// Import error handler
-import { errorHandler } from './middleware/errorHandler.js';
-
-// Error handling middleware (must be last)
 app.use(errorHandler);
-
-// 404 handler
 app.use((req, res) => {
   res.status(404).json({ error: 'Route not found', code: 'NOT_FOUND' });
 });
 
-// Start server
-httpServer.listen(PORT, () => {
+async function start() {
+  await connectDatabase();
+  await migrateLegacyElements();
+  await seedDevelopmentUser();
+  const redis = await connectRedis();
+  const pubClient = redis;
+  const subClient = createRedisClient();
+  io.adapter(createAdapter(pubClient, subClient));
+
+  httpServer.listen(PORT, () => {
+    const mode = isProduction ? 'production' : 'development';
+    console.log(`Collaboard API listening on http://localhost:${PORT} (${mode})`);
+  });
+}
+
+start().catch((error) => {
+  console.error('Failed to start server:', error);
+  process.exit(1);
 });

@@ -4,7 +4,7 @@
  */
 
 import React, { createContext, useContext, useState, useEffect, useCallback, useMemo } from 'react';
-import { apiRequest, ApiError } from '@/lib/apiClient';
+import { apiRequest, clearCache } from '@/lib/apiClient';
 import type { User } from '@/types';
 
 type Profile = User;
@@ -89,6 +89,9 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         throw new Error('No token received from server');
       }
 
+      // Drop the previous account's cached boards / profile before switching tokens
+      clearCache();
+
       // Save token to localStorage
       try {
         localStorage.setItem('auth_token', data.token);
@@ -138,6 +141,8 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         throw new Error('No token received from server');
       }
 
+      clearCache();
+
       // Save token to localStorage
       try {
         localStorage.setItem('auth_token', data.token);
@@ -178,6 +183,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
 
   const signOut = useCallback(async () => {
     localStorage.removeItem('auth_token');
+    clearCache();
     setUser(null);
     setProfile(null);
   }, []);

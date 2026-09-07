@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -19,21 +19,27 @@ import {
   Trash2,
   Edit,
 } from "lucide-react";
+import { useWorldDrag } from "./useWorldDrag";
+import ShapeGraphic from "./ShapeGraphic";
+import { getShape } from "./shapes";
+import { getInsertIcon } from "./insertIcons";
 
 interface InsertableElementProps {
   element: any;
   isSelected: boolean;
+  zoom: number;
+  interactive?: boolean;
   onSelect: () => void;
   onUpdate: (updates: any) => void;
   onDelete: () => void;
   onMove: (x: number, y: number) => void;
+  onDragEnd: () => void;
   onResize: (width: number, height: number) => void;
 }
 
-export const ImageElement = ({ element, isSelected, onSelect, onUpdate, onDelete, onMove, onResize }: InsertableElementProps) => {
+export const ImageElement = ({ element, isSelected, zoom, interactive = true, onSelect, onUpdate, onDelete, onMove, onDragEnd }: InsertableElementProps) => {
   const [isEditing, setIsEditing] = useState(false);
-  const [isDragging, setIsDragging] = useState(false);
-  const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
+  const { isDragging, onMouseDown } = useWorldDrag(element, zoom, onMove, onDragEnd, onSelect, interactive);
   const [editData, setEditData] = useState({
     alt: element.alt || "",
     opacity: element.opacity || 1,
@@ -45,60 +51,10 @@ export const ImageElement = ({ element, isSelected, onSelect, onUpdate, onDelete
     setIsEditing(false);
   };
 
-  const handleMouseDown = (e: React.MouseEvent) => {
-    if (e.button !== 0) return; // Only left mouse button
-    
-    const rect = e.currentTarget.getBoundingClientRect();
-    const offsetX = e.clientX - rect.left;
-    const offsetY = e.clientY - rect.top;
-    
-    setDragOffset({ x: offsetX, y: offsetY });
-    setIsDragging(true);
-    onSelect();
-    
-    e.preventDefault();
-    e.stopPropagation();
-  };
-
-  const handleMouseMove = (e: React.MouseEvent) => {
-    if (!isDragging) return;
-    
-    const newX = e.clientX - dragOffset.x;
-    const newY = e.clientY - dragOffset.y;
-    
-    onMove(newX, newY);
-  };
-
-  const handleMouseUp = () => {
-    setIsDragging(false);
-  };
-
-  useEffect(() => {
-    if (isDragging) {
-      const handleGlobalMouseMove = (e: MouseEvent) => {
-        const newX = e.clientX - dragOffset.x;
-        const newY = e.clientY - dragOffset.y;
-        onMove(newX, newY);
-      };
-
-      const handleGlobalMouseUp = () => {
-        setIsDragging(false);
-      };
-
-      document.addEventListener('mousemove', handleGlobalMouseMove);
-      document.addEventListener('mouseup', handleGlobalMouseUp);
-
-      return () => {
-        document.removeEventListener('mousemove', handleGlobalMouseMove);
-        document.removeEventListener('mouseup', handleGlobalMouseUp);
-      };
-    }
-  }, [isDragging, dragOffset, onMove]);
-
   return (
     <>
       <div
-        className={`absolute ${isSelected ? 'ring-2 ring-blue-500' : ''} ${isDragging ? 'cursor-grabbing' : 'cursor-grab'}`}
+        className={`absolute ${isSelected && interactive ? 'ring-2 ring-blue-500' : ''} ${interactive ? (isDragging ? 'cursor-grabbing' : 'cursor-grab') : ''}`}
         style={{
           left: element.x,
           top: element.y,
@@ -106,9 +62,7 @@ export const ImageElement = ({ element, isSelected, onSelect, onUpdate, onDelete
           height: element.height,
           zIndex: isDragging ? 1000 : 'auto',
         }}
-        onMouseDown={handleMouseDown}
-        onMouseMove={handleMouseMove}
-        onMouseUp={handleMouseUp}
+        onMouseDown={interactive ? onMouseDown : undefined}
       >
         <img
           src={element.src}
@@ -121,8 +75,11 @@ export const ImageElement = ({ element, isSelected, onSelect, onUpdate, onDelete
           draggable={false}
         />
         
-        {isSelected && (
-          <div className="absolute -top-8 left-0 bg-white border border-gray-300 rounded shadow-lg flex items-center gap-1 p-1">
+        {isSelected && interactive && (
+          <div
+            className="absolute -top-8 left-0 bg-white border border-gray-300 rounded shadow-lg flex items-center gap-1 p-1"
+            onMouseDown={(e) => e.stopPropagation()}
+          >
             <Button
               size="sm"
               variant="ghost"
@@ -197,116 +154,30 @@ export const ImageElement = ({ element, isSelected, onSelect, onUpdate, onDelete
   );
 };
 
-export const ShapeElement = ({ element, isSelected, onSelect, onUpdate, onDelete, onMove, onResize }: InsertableElementProps) => {
+export const ShapeElement = ({ element, isSelected, zoom, interactive = true, onSelect, onUpdate, onDelete, onMove, onDragEnd }: InsertableElementProps) => {
   const [isEditing, setIsEditing] = useState(false);
-  const [isDragging, setIsDragging] = useState(false);
-  const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
+  const { isDragging, onMouseDown } = useWorldDrag(element, zoom, onMove, onDragEnd, onSelect, interactive);
   const [editData, setEditData] = useState({
     color: element.color || "#000000",
     fillColor: element.fillColor || "transparent",
     strokeWidth: element.strokeWidth || 2,
   });
 
-  const handleMouseDown = (e: React.MouseEvent) => {
-    if (e.button !== 0) return; // Only left mouse button
-    
-    const rect = e.currentTarget.getBoundingClientRect();
-    const offsetX = e.clientX - rect.left;
-    const offsetY = e.clientY - rect.top;
-    
-    setDragOffset({ x: offsetX, y: offsetY });
-    setIsDragging(true);
-    onSelect();
-    
-    e.preventDefault();
-    e.stopPropagation();
-  };
-
-  const handleMouseMove = (e: React.MouseEvent) => {
-    if (!isDragging) return;
-    
-    const newX = e.clientX - dragOffset.x;
-    const newY = e.clientY - dragOffset.y;
-    
-    onMove(newX, newY);
-  };
-
-  const handleMouseUp = () => {
-    setIsDragging(false);
-  };
-
-  useEffect(() => {
-    if (isDragging) {
-      const handleGlobalMouseMove = (e: MouseEvent) => {
-        const newX = e.clientX - dragOffset.x;
-        const newY = e.clientY - dragOffset.y;
-        onMove(newX, newY);
-      };
-
-      const handleGlobalMouseUp = () => {
-        setIsDragging(false);
-      };
-
-      document.addEventListener('mousemove', handleGlobalMouseMove);
-      document.addEventListener('mouseup', handleGlobalMouseUp);
-
-      return () => {
-        document.removeEventListener('mousemove', handleGlobalMouseMove);
-        document.removeEventListener('mouseup', handleGlobalMouseUp);
-      };
-    }
-  }, [isDragging, dragOffset, onMove]);
-
-  const renderShape = () => {
-    const style = {
-      width: element.width,
-      height: element.height,
-      border: `${editData.strokeWidth}px solid ${editData.color}`,
-      backgroundColor: editData.fillColor === "transparent" ? "transparent" : editData.fillColor,
-    };
-
-    switch (element.shapeType) {
-      case "rectangle":
-        return <div style={style} className="w-full h-full" />;
-      case "circle":
-        return <div style={{ ...style, borderRadius: "50%" }} className="w-full h-full" />;
-      case "triangle":
-        return (
-          <div className="w-full h-full relative">
-            <div
-              style={{
-                width: 0,
-                height: 0,
-                borderLeft: `${element.width / 2}px solid transparent`,
-                borderRight: `${element.width / 2}px solid transparent`,
-                borderBottom: `${element.height}px solid ${editData.color}`,
-                position: "absolute",
-                top: 0,
-                left: 0,
-              }}
-            />
-          </div>
-        );
-      case "star":
-        return (
-          <svg width={element.width} height={element.height} viewBox="0 0 24 24">
-            <polygon
-              points="12,2 15.09,8.26 22,9.27 17,14.14 18.18,21.02 12,17.77 5.82,21.02 7,14.14 2,9.27 8.91,8.26"
-              fill={editData.fillColor}
-              stroke={editData.color}
-              strokeWidth={editData.strokeWidth}
-            />
-          </svg>
-        );
-      default:
-        return <div style={style} className="w-full h-full" />;
-    }
-  };
+  const renderShape = () => (
+    <ShapeGraphic
+      type={element.shapeType}
+      fill={element.fillColor}
+      stroke={element.color || "#111827"}
+      strokeWidth={element.strokeWidth || 2}
+      className="w-full h-full"
+      title={getShape(element.shapeType).name}
+    />
+  );
 
   return (
     <>
       <div
-        className={`absolute ${isSelected ? 'ring-2 ring-blue-500' : ''} ${isDragging ? 'cursor-grabbing' : 'cursor-grab'}`}
+        className={`absolute ${isSelected && interactive ? 'ring-2 ring-blue-500' : ''} ${interactive ? (isDragging ? 'cursor-grabbing' : 'cursor-grab') : ''}`}
         style={{
           left: element.x,
           top: element.y,
@@ -314,16 +185,17 @@ export const ShapeElement = ({ element, isSelected, onSelect, onUpdate, onDelete
           height: element.height,
           zIndex: isDragging ? 1000 : 'auto',
         }}
-        onMouseDown={handleMouseDown}
-        onMouseMove={handleMouseMove}
-        onMouseUp={handleMouseUp}
+        onMouseDown={interactive ? onMouseDown : undefined}
       >
         <div className="w-full h-full pointer-events-none">
           {renderShape()}
         </div>
         
-        {isSelected && (
-          <div className="absolute -top-8 left-0 bg-white border border-gray-300 rounded shadow-lg flex items-center gap-1 p-1">
+        {isSelected && interactive && (
+          <div
+            className="absolute -top-8 left-0 bg-white border border-gray-300 rounded shadow-lg flex items-center gap-1 p-1"
+            onMouseDown={(e) => e.stopPropagation()}
+          >
             <Button
               size="sm"
               variant="ghost"
@@ -402,65 +274,14 @@ export const ShapeElement = ({ element, isSelected, onSelect, onUpdate, onDelete
   );
 };
 
-export const TableElement = ({ element, isSelected, onSelect, onUpdate, onDelete, onMove, onResize }: InsertableElementProps) => {
+export const TableElement = ({ element, isSelected, zoom, interactive = true, onSelect, onUpdate, onDelete, onMove, onDragEnd }: InsertableElementProps) => {
   const [isEditing, setIsEditing] = useState(false);
-  const [isDragging, setIsDragging] = useState(false);
-  const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
+  const { isDragging, onMouseDown } = useWorldDrag(element, zoom, onMove, onDragEnd, onSelect, interactive);
   const [tableData, setTableData] = useState(() => {
     if (element.data) return element.data;
     // Create separate arrays for each row to avoid reference issues
     return Array(element.rows).fill(null).map(() => Array(element.cols).fill(""));
   });
-
-  const handleMouseDown = (e: React.MouseEvent) => {
-    if (e.button !== 0) return; // Only left mouse button
-    
-    const rect = e.currentTarget.getBoundingClientRect();
-    const offsetX = e.clientX - rect.left;
-    const offsetY = e.clientY - rect.top;
-    
-    setDragOffset({ x: offsetX, y: offsetY });
-    setIsDragging(true);
-    onSelect();
-    
-    e.preventDefault();
-    e.stopPropagation();
-  };
-
-  const handleMouseMove = (e: React.MouseEvent) => {
-    if (!isDragging) return;
-    
-    const newX = e.clientX - dragOffset.x;
-    const newY = e.clientY - dragOffset.y;
-    
-    onMove(newX, newY);
-  };
-
-  const handleMouseUp = () => {
-    setIsDragging(false);
-  };
-
-  useEffect(() => {
-    if (isDragging) {
-      const handleGlobalMouseMove = (e: MouseEvent) => {
-        const newX = e.clientX - dragOffset.x;
-        const newY = e.clientY - dragOffset.y;
-        onMove(newX, newY);
-      };
-
-      const handleGlobalMouseUp = () => {
-        setIsDragging(false);
-      };
-
-      document.addEventListener('mousemove', handleGlobalMouseMove);
-      document.addEventListener('mouseup', handleGlobalMouseUp);
-
-      return () => {
-        document.removeEventListener('mousemove', handleGlobalMouseMove);
-        document.removeEventListener('mouseup', handleGlobalMouseUp);
-      };
-    }
-  }, [isDragging, dragOffset, onMove]);
 
   const handleCellChange = (rowIndex: number, colIndex: number, value: string) => {
     const newData = tableData.map((row: string[], r: number) =>
@@ -472,7 +293,7 @@ export const TableElement = ({ element, isSelected, onSelect, onUpdate, onDelete
   return (
     <>
       <div
-        className={`absolute ${isSelected ? 'ring-2 ring-blue-500' : ''} ${isDragging ? 'cursor-grabbing' : 'cursor-grab'}`}
+        className={`absolute ${isSelected && interactive ? 'ring-2 ring-blue-500' : ''} ${interactive ? (isDragging ? 'cursor-grabbing' : 'cursor-grab') : ''}`}
         style={{
           left: element.x,
           top: element.y,
@@ -480,9 +301,7 @@ export const TableElement = ({ element, isSelected, onSelect, onUpdate, onDelete
           height: element.height,
           zIndex: isDragging ? 1000 : 'auto',
         }}
-        onMouseDown={handleMouseDown}
-        onMouseMove={handleMouseMove}
-        onMouseUp={handleMouseUp}
+        onMouseDown={interactive ? onMouseDown : undefined}
       >
         <table className="w-full h-full border-collapse border border-gray-300 pointer-events-none">
           <tbody>
@@ -502,8 +321,11 @@ export const TableElement = ({ element, isSelected, onSelect, onUpdate, onDelete
           </tbody>
         </table>
         
-        {isSelected && (
-          <div className="absolute -top-8 left-0 bg-white border border-gray-300 rounded shadow-lg flex items-center gap-1 p-1">
+        {isSelected && interactive && (
+          <div
+            className="absolute -top-8 left-0 bg-white border border-gray-300 rounded shadow-lg flex items-center gap-1 p-1"
+            onMouseDown={(e) => e.stopPropagation()}
+          >
             <Button
               size="sm"
               variant="ghost"
@@ -562,59 +384,8 @@ export const TableElement = ({ element, isSelected, onSelect, onUpdate, onDelete
   );
 };
 
-export const ChartElement = ({ element, isSelected, onSelect, onUpdate, onDelete, onMove, onResize }: InsertableElementProps) => {
-  const [isDragging, setIsDragging] = useState(false);
-  const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
-
-  const handleMouseDown = (e: React.MouseEvent) => {
-    if (e.button !== 0) return; // Only left mouse button
-    
-    const rect = e.currentTarget.getBoundingClientRect();
-    const offsetX = e.clientX - rect.left;
-    const offsetY = e.clientY - rect.top;
-    
-    setDragOffset({ x: offsetX, y: offsetY });
-    setIsDragging(true);
-    onSelect();
-    
-    e.preventDefault();
-    e.stopPropagation();
-  };
-
-  const handleMouseMove = (e: React.MouseEvent) => {
-    if (!isDragging) return;
-    
-    const newX = e.clientX - dragOffset.x;
-    const newY = e.clientY - dragOffset.y;
-    
-    onMove(newX, newY);
-  };
-
-  const handleMouseUp = () => {
-    setIsDragging(false);
-  };
-
-  useEffect(() => {
-    if (isDragging) {
-      const handleGlobalMouseMove = (e: MouseEvent) => {
-        const newX = e.clientX - dragOffset.x;
-        const newY = e.clientY - dragOffset.y;
-        onMove(newX, newY);
-      };
-
-      const handleGlobalMouseUp = () => {
-        setIsDragging(false);
-      };
-
-      document.addEventListener('mousemove', handleGlobalMouseMove);
-      document.addEventListener('mouseup', handleGlobalMouseUp);
-
-      return () => {
-        document.removeEventListener('mousemove', handleGlobalMouseMove);
-        document.removeEventListener('mouseup', handleGlobalMouseUp);
-      };
-    }
-  }, [isDragging, dragOffset, onMove]);
+export const ChartElement = ({ element, isSelected, zoom, interactive = true, onSelect, onDelete, onMove, onDragEnd }: InsertableElementProps) => {
+  const { isDragging, onMouseDown } = useWorldDrag(element, zoom, onMove, onDragEnd, onSelect, interactive);
 
   const renderChart = () => {
     const { chartType, data, colors } = element;
@@ -681,7 +452,7 @@ export const ChartElement = ({ element, isSelected, onSelect, onUpdate, onDelete
 
   return (
     <div
-      className={`absolute ${isSelected ? 'ring-2 ring-blue-500' : ''} ${isDragging ? 'cursor-grabbing' : 'cursor-grab'}`}
+      className={`absolute ${isSelected && interactive ? 'ring-2 ring-blue-500' : ''} ${interactive ? (isDragging ? 'cursor-grabbing' : 'cursor-grab') : ''}`}
       style={{
         left: element.x,
         top: element.y,
@@ -689,16 +460,17 @@ export const ChartElement = ({ element, isSelected, onSelect, onUpdate, onDelete
         height: element.height,
         zIndex: isDragging ? 1000 : 'auto',
       }}
-      onMouseDown={handleMouseDown}
-      onMouseMove={handleMouseMove}
-      onMouseUp={handleMouseUp}
+      onMouseDown={interactive ? onMouseDown : undefined}
     >
       <div className="w-full h-full pointer-events-none">
         {renderChart()}
       </div>
       
-      {isSelected && (
-        <div className="absolute -top-8 left-0 bg-white border border-gray-300 rounded shadow-lg flex items-center gap-1 p-1">
+      {isSelected && interactive && (
+        <div
+          className="absolute -top-8 left-0 bg-white border border-gray-300 rounded shadow-lg flex items-center gap-1 p-1"
+          onMouseDown={(e) => e.stopPropagation()}
+        >
           <Button
             size="sm"
             variant="ghost"
@@ -713,63 +485,12 @@ export const ChartElement = ({ element, isSelected, onSelect, onUpdate, onDelete
   );
 };
 
-export const IconElement = ({ element, isSelected, onSelect, onUpdate, onDelete, onMove, onResize }: InsertableElementProps) => {
-  const [isDragging, setIsDragging] = useState(false);
-  const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
-
-  const handleMouseDown = (e: React.MouseEvent) => {
-    if (e.button !== 0) return; // Only left mouse button
-    
-    const rect = e.currentTarget.getBoundingClientRect();
-    const offsetX = e.clientX - rect.left;
-    const offsetY = e.clientY - rect.top;
-    
-    setDragOffset({ x: offsetX, y: offsetY });
-    setIsDragging(true);
-    onSelect();
-    
-    e.preventDefault();
-    e.stopPropagation();
-  };
-
-  const handleMouseMove = (e: React.MouseEvent) => {
-    if (!isDragging) return;
-    
-    const newX = e.clientX - dragOffset.x;
-    const newY = e.clientY - dragOffset.y;
-    
-    onMove(newX, newY);
-  };
-
-  const handleMouseUp = () => {
-    setIsDragging(false);
-  };
-
-  useEffect(() => {
-    if (isDragging) {
-      const handleGlobalMouseMove = (e: MouseEvent) => {
-        const newX = e.clientX - dragOffset.x;
-        const newY = e.clientY - dragOffset.y;
-        onMove(newX, newY);
-      };
-
-      const handleGlobalMouseUp = () => {
-        setIsDragging(false);
-      };
-
-      document.addEventListener('mousemove', handleGlobalMouseMove);
-      document.addEventListener('mouseup', handleGlobalMouseUp);
-
-      return () => {
-        document.removeEventListener('mousemove', handleGlobalMouseMove);
-        document.removeEventListener('mouseup', handleGlobalMouseUp);
-      };
-    }
-  }, [isDragging, dragOffset, onMove]);
+export const IconElement = ({ element, isSelected, zoom, interactive = true, onSelect, onDelete, onMove, onDragEnd }: InsertableElementProps) => {
+  const { isDragging, onMouseDown } = useWorldDrag(element, zoom, onMove, onDragEnd, onSelect, interactive);
 
   return (
     <div
-      className={`absolute ${isSelected ? 'ring-2 ring-blue-500' : ''} ${isDragging ? 'cursor-grabbing' : 'cursor-grab'}`}
+      className={`absolute ${isSelected && interactive ? 'ring-2 ring-blue-500' : ''} ${interactive ? (isDragging ? 'cursor-grabbing' : 'cursor-grab') : ''}`}
       style={{
         left: element.x,
         top: element.y,
@@ -778,16 +499,22 @@ export const IconElement = ({ element, isSelected, onSelect, onUpdate, onDelete,
         fontSize: `${Math.min(element.width, element.height)}px`,
         zIndex: isDragging ? 1000 : 'auto',
       }}
-      onMouseDown={handleMouseDown}
-      onMouseMove={handleMouseMove}
-      onMouseUp={handleMouseUp}
+      onMouseDown={interactive ? onMouseDown : undefined}
     >
-      <div className="w-full h-full flex items-center justify-center pointer-events-none">
-        {element.symbol}
+      <div className="w-full h-full flex items-center justify-center pointer-events-none text-gray-800">
+        {(() => {
+          const icon = getInsertIcon(element.symbol);
+          if (!icon) return element.symbol;
+          const Graphic = icon.Icon;
+          return <Graphic className="h-[80%] w-[80%]" strokeWidth={1.75} />;
+        })()}
       </div>
       
-      {isSelected && (
-        <div className="absolute -top-8 left-0 bg-white border border-gray-300 rounded shadow-lg flex items-center gap-1 p-1">
+      {isSelected && interactive && (
+        <div
+          className="absolute -top-8 left-0 bg-white border border-gray-300 rounded shadow-lg flex items-center gap-1 p-1"
+          onMouseDown={(e) => e.stopPropagation()}
+        >
           <Button
             size="sm"
             variant="ghost"
