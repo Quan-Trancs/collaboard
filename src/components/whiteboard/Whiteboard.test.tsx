@@ -20,6 +20,7 @@ function stubSocket() {
     sendDrawingUpdate: vi.fn(),
     sendElementDelete: vi.fn(),
     sendUndo: vi.fn(),
+    sendRedo: vi.fn(),
     sendViewport: vi.fn(),
     commitDrawing: vi.fn(),
     flushBoard: vi.fn(),
@@ -28,13 +29,14 @@ function stubSocket() {
     onElementUpdated: vi.fn(() => () => {}),
     onElementDeleted: vi.fn(() => () => {}),
     onUndoApplied: vi.fn(() => () => {}),
+    onRedoApplied: vi.fn(() => () => {}),
     onCursorUpdate: vi.fn(() => () => {}),
     onBoardCleared: vi.fn(() => () => {}),
     onUserLeft: vi.fn(() => () => {}),
   });
 }
 
-function stubBoard() {
+function stubBoard(overrides?: { can_edit?: boolean; permission?: string }) {
   vi.spyOn(boardApi, "getBoard").mockResolvedValue({
     id: BOARD_ID,
     title: "Design Sprint",
@@ -45,17 +47,22 @@ function stubBoard() {
     viewport: { x: -2000, y: -2000, zoom: 1 },
     objects: [],
     drawings: [],
-    can_edit: true,
-    permission: "owner",
+    can_edit: overrides?.can_edit ?? true,
+    permission: overrides?.permission ?? "owner",
     collaborators: [],
   });
   vi.spyOn(objectApi, "getObjects").mockResolvedValue([]);
   vi.spyOn(drawingApi, "getDrawings").mockResolvedValue([]);
 }
 
-function renderBoard(overrides?: { onBackToDashboard?: () => void; onLogout?: () => void }) {
+function renderBoard(overrides?: {
+  onBackToDashboard?: () => void;
+  onLogout?: () => void;
+  can_edit?: boolean;
+  permission?: string;
+}) {
   stubSocket();
-  stubBoard();
+  stubBoard({ can_edit: overrides?.can_edit, permission: overrides?.permission });
   return render(
     <TooltipProvider>
       <Whiteboard
@@ -85,6 +92,14 @@ describe("Whiteboard", () => {
     expect(screen.getByRole("heading", { name: "Design Sprint" })).toBeInTheDocument();
     expect(screen.getByLabelText("Collaborator list")).toBeInTheDocument();
     expect(screen.getByText("100%")).toBeInTheDocument();
+  });
+
+  it("locks drawing tools for view-only collaborators", async () => {
+    renderBoard({ can_edit: false, permission: "view" });
+    expect(await screen.findByText("View only")).toBeInTheDocument();
+    expect(screen.getByLabelText("Pen tool")).toBeDisabled();
+    expect(screen.getByLabelText("Undo")).toBeDisabled();
+    expect(screen.getByLabelText("Redo")).toBeDisabled();
   });
 
   it("changes the zoom label when zooming in", async () => {
@@ -152,6 +167,7 @@ describe("Whiteboard", () => {
       sendDrawingUpdate,
       sendElementDelete: vi.fn(),
       sendUndo: vi.fn(),
+    sendRedo: vi.fn(),
       sendViewport: vi.fn(),
       commitDrawing,
       flushBoard: vi.fn(),
@@ -160,6 +176,7 @@ describe("Whiteboard", () => {
       onElementUpdated: vi.fn(() => () => {}),
       onElementDeleted: vi.fn(() => () => {}),
       onUndoApplied: vi.fn(() => () => {}),
+    onRedoApplied: vi.fn(() => () => {}),
       onCursorUpdate: vi.fn(() => () => {}),
       onBoardCleared: vi.fn(() => () => {}),
       onUserLeft: vi.fn(() => () => {}),
@@ -200,6 +217,7 @@ describe("Whiteboard", () => {
       sendDrawingUpdate: vi.fn(),
       sendElementDelete: vi.fn(),
       sendUndo: vi.fn(),
+    sendRedo: vi.fn(),
       sendViewport: vi.fn(),
       commitDrawing: vi.fn(),
       flushBoard: vi.fn(),
@@ -208,6 +226,7 @@ describe("Whiteboard", () => {
       onElementUpdated: vi.fn(() => () => {}),
       onElementDeleted: vi.fn(() => () => {}),
       onUndoApplied: vi.fn(() => () => {}),
+    onRedoApplied: vi.fn(() => () => {}),
       onCursorUpdate: vi.fn(() => () => {}),
       onBoardCleared: vi.fn(() => () => {}),
       onUserLeft: vi.fn(() => () => {}),
@@ -269,6 +288,7 @@ describe("Whiteboard", () => {
       sendDrawingUpdate: vi.fn(),
       sendElementDelete,
       sendUndo: vi.fn(),
+    sendRedo: vi.fn(),
       sendViewport: vi.fn(),
       commitDrawing: vi.fn(),
       flushBoard: vi.fn(),
@@ -277,6 +297,7 @@ describe("Whiteboard", () => {
       onElementUpdated: vi.fn(() => () => {}),
       onElementDeleted: vi.fn(() => () => {}),
       onUndoApplied: vi.fn(() => () => {}),
+    onRedoApplied: vi.fn(() => () => {}),
       onCursorUpdate: vi.fn(() => () => {}),
       onBoardCleared: vi.fn(() => () => {}),
       onUserLeft: vi.fn(() => () => {}),
@@ -336,6 +357,7 @@ describe("Whiteboard", () => {
       sendDrawingUpdate: vi.fn(),
       sendElementDelete: vi.fn(),
       sendUndo: vi.fn(),
+    sendRedo: vi.fn(),
       sendViewport: vi.fn(),
       commitDrawing: vi.fn(),
       flushBoard: vi.fn(),
@@ -344,6 +366,7 @@ describe("Whiteboard", () => {
       onElementUpdated: vi.fn(() => () => {}),
       onElementDeleted: vi.fn(() => () => {}),
       onUndoApplied: vi.fn(() => () => {}),
+    onRedoApplied: vi.fn(() => () => {}),
       onCursorUpdate: vi.fn(() => () => {}),
       onBoardCleared: vi.fn(() => () => {}),
       onUserLeft: vi.fn(() => () => {}),

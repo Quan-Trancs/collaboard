@@ -55,9 +55,9 @@ REST `/api/objects` and `/api/drawings` remain as a fallback when the socket is 
 Live edits follow presence + commit, not operational transform.
 
 - **Preview** — while the pointer is down, `drawing-update` patches Redis (`points`, size, or `x,y`) and broadcasts. Mongo is not written on the hot path.
-- **Commit** — mouseup, insert, paste, and delete send a compact patch plus `drawing-commit`. The server then flushes Redis to Mongo. Zero-size cancelled shapes are deleted instead of committed.
+- **Commit** — mouseup, insert, paste, and delete send a compact patch plus `drawing-commit`. The server then flushes Redis to Mongo. Zero-size cancelled shapes are deleted instead of committed. View-only collaborators cannot start, update, or undo strokes.
 - **Cursors** — `cursor-move` at ~20 Hz (`CURSOR_INTERVAL_MS = 50`). The server broadcasts only; clients interpolate with lerp so motion looks smooth between packets.
-- **Undo** — last 200 **committed** actions. In-progress previews are not history entries.
+- **Undo** — last 200 **committed** actions. In-progress previews are not history entries. Redo is the inverse stack; a new commit clears it.
 - **Viewport** — Redis-only until the next commit, leave, disconnect, Save, or Clear.
 
 ## Development mode

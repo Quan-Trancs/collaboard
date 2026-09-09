@@ -15,6 +15,8 @@ interface BoardState {
   viewport?: { x: number; y: number; zoom: number } | null;
   users: Array<{ userId: string; name: string; color: string }>;
   cursors: Array<{ socketId: string; userId: string; x: number; y: number; name: string; color: string }>;
+  canUndo?: boolean;
+  canRedo?: boolean;
 }
 
 export const useSocket = ({ boardId, user, enabled = true }: UseSocketOptions) => {
@@ -236,6 +238,11 @@ export const useSocket = ({ boardId, user, enabled = true }: UseSocketOptions) =
     socketRef.current.emit('undo', { boardId });
   }, [boardId, isConnected]);
 
+  const sendRedo = useCallback(() => {
+    if (!socketRef.current || !isConnected) return;
+    socketRef.current.emit('redo', { boardId });
+  }, [boardId, isConnected]);
+
   const sendViewport = useCallback((viewport: { x: number; y: number; zoom: number }) => {
     if (!socketRef.current || !isConnected) return;
     socketRef.current.emit('viewport-update', { boardId, viewport });
@@ -289,6 +296,14 @@ export const useSocket = ({ boardId, user, enabled = true }: UseSocketOptions) =
     };
   }, [isConnected]);
 
+  const onRedoApplied = useCallback((callback: (data: any) => void) => {
+    if (!socketRef.current || !isConnected) return () => {};
+    socketRef.current.on('redo-applied', callback);
+    return () => {
+      socketRef.current?.off('redo-applied', callback);
+    };
+  }, [isConnected]);
+
   const onCursorUpdate = useCallback((callback: (data: any) => void) => {
     if (!socketRef.current || !isConnected) return () => {};
     socketRef.current.on('cursor-update', callback);
@@ -323,6 +338,7 @@ export const useSocket = ({ boardId, user, enabled = true }: UseSocketOptions) =
     sendDrawingUpdate,
     sendElementDelete,
     sendUndo,
+    sendRedo,
     sendViewport,
     commitDrawing,
     flushBoard,
@@ -331,6 +347,7 @@ export const useSocket = ({ boardId, user, enabled = true }: UseSocketOptions) =
     onElementUpdated,
     onElementDeleted,
     onUndoApplied,
+    onRedoApplied,
     onCursorUpdate,
     onBoardCleared,
     onUserLeft,

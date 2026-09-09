@@ -213,6 +213,18 @@ function normalizeElementBox(element: DrawingElement): DrawingElement {
   return { ...element, x, y, width, height };
 }
 
+function boardAllowsEdit(
+  board: { can_edit?: boolean; permission?: string; owner_id?: string } | null | undefined,
+  userId?: string
+) {
+  if (!board) return false;
+  if (board.permission === "view") return false;
+  if (board.can_edit === false) return false;
+  if (board.can_edit === true) return true;
+  if (board.permission === "owner" || board.permission === "edit" || board.permission === "admin") return true;
+  return Boolean(userId && board.owner_id === userId);
+}
+
 interface Collaborator {
   id: string;
   name: string;
@@ -261,9 +273,11 @@ const Whiteboard = ({
   const pasteCountRef = useRef(0);
   const dragDepthRef = useRef(0);
   const [isDragOver, setIsDragOver] = useState(false);
-  const [canEdit, setCanEdit] = useState(true);
+  const [canEdit, setCanEdit] = useState(false);
   const canEditRef = useRef(canEdit);
   canEditRef.current = canEdit;
+  const [canServerUndo, setCanServerUndo] = useState(false);
+  const [canServerRedo, setCanServerRedo] = useState(false);
   const isTextModeRef = useRef(isTextMode);
   isTextModeRef.current = isTextMode;
   const currentColorRef = useRef(currentColor);
@@ -719,6 +733,8 @@ const Whiteboard = ({
     // Update both states
     setHistory(newHistory);
     setHistoryIndex(newHistory.length - 1);
+    setCanServerUndo(true);
+    setCanServerRedo(false);
   }, [elements]);
 
   // Helper to map database element to DrawingElement
@@ -981,6 +997,7 @@ const Whiteboard = ({
           is_public?: boolean;
           permission?: string;
           can_edit?: boolean;
+          owner_id?: string;
         };
         const loadedShare: BoardShareInfo = {
           owner: boardPeople.owner || {
@@ -1013,7 +1030,7 @@ const Whiteboard = ({
             }))
           );
         }).catch(() => {});
-        const editable = boardPeople.can_edit !== false;
+        const editable = boardAllowsEdit(boardPeople, user.id);
         setCanEdit(editable);
         if (!editable) {
           setCurrentTool("select");
@@ -1076,6 +1093,8 @@ const Whiteboard = ({
         ? [...drawings, ...objects]
         : socket.boardState.elements.map((el: DatabaseElement) => mapDatabaseElementToDrawingElement(el));
       setElements(serverElements);
+      if (typeof socket.boardState.canUndo === "boolean") setCanServerUndo(socket.boardState.canUndo);
+      if (typeof socket.boardState.canRedo === "boolean") setCanServerRedo(socket.boardState.canRedo);
     }
 
     // Listen for element additions
@@ -1108,25 +1127,40 @@ const Whiteboard = ({
       }
     });
 
-    // Listen for undo/redo
-    const unsubscribeUndo = socket.onUndoApplied((data: { action: string; elementId?: string; element?: DatabaseElement; previousState?: DatabaseElement; userId: string }) => {
-      if (data.userId !== user.id) {
-        if (data.action === 'delete') {
-          setElements((prev) => prev.filter((el) => el.id !== data.elementId));
-        } else if (data.action === 'add' && data.element) {
-          const newElement = mapDatabaseElementToDrawingElement(data.element);
-          setElements((prev) => {
-            if (prev.find(el => el.id === newElement.id)) return prev;
-            return [...prev, newElement];
-          });
-        } else if (data.action === 'update' && data.previousState) {
-          const restoredElement = mapDatabaseElementToDrawingElement(data.previousState);
-          setElements((prev) =>
-            prev.map((el) => (el.id === data.elementId ? restoredElement : el))
-          );
-        }
+    const applyHistoryEvent = (data: {
+      action: string;
+      elementId?: string;
+      element?: DatabaseElement;
+      previousState?: DatabaseElement;
+      canUndo?: boolean;
+      canRedo?: boolean;
+    }) => {
+      if (typeof data.canUndo === "boolean") setCanServerUndo(data.canUndo);
+      if (typeof data.canRedo === "boolean") setCanServerRedo(data.canRedo);
+      if (data.action === "delete" && data.elementId) {
+        setElements((prev) => prev.filter((el) => el.id !== data.elementId));
+        return;
       }
-    });
+      if (data.action === "add" && data.element) {
+        const newElement = mapDatabaseElementToDrawingElement(data.element);
+        setElements((prev) => {
+          if (prev.find((el) => el.id === newElement.id)) return prev;
+          return [...prev, newElement];
+        });
+        return;
+      }
+      if (data.action === "update") {
+        const next = data.element || data.previousState;
+        if (!next) return;
+        const restoredElement = mapDatabaseElementToDrawingElement(next);
+        setElements((prev) =>
+          prev.map((el) => (el.id === data.elementId ? restoredElement : el))
+        );
+      }
+    };
+
+    const unsubscribeUndo = socket.onUndoApplied(applyHistoryEvent);
+    const unsubscribeRedo = socket.onRedoApplied(applyHistoryEvent);
 
     // Listen for cursor updates
     const unsubscribeCleared = socket.onBoardCleared(() => {
@@ -1151,6 +1185,7 @@ const Whiteboard = ({
       unsubscribeUpdated();
       unsubscribeDeleted();
       unsubscribeUndo();
+      unsubscribeRedo();
       unsubscribeCleared();
       unsubscribeCursor();
       unsubscribeUserLeft();
@@ -1967,34 +2002,38 @@ const Whiteboard = ({
 
   // Undo/Redo (collaborative via WebSocket)
   const undo = () => {
+    if (!canEditRef.current) return;
+    if (socket.isConnected) {
+      socket.sendUndo();
+      return;
+    }
+
     const currentIndex = historyIndexRef.current;
     const currentHistory = historyRef.current;
     
     if (currentIndex > 0) {
       const newIndex = currentIndex - 1;
       if (currentHistory[newIndex]) {
-        // Create a deep copy of the history state
         const elementsToRestore = currentHistory[newIndex].map(el => ({ ...el, points: el.points ? [...el.points] : undefined }));
         setElements(elementsToRestore);
         setHistoryIndex(newIndex);
       }
     }
-    
-    // Send undo via socket if connected (for collaboration)
-    if (socket.isConnected) {
-      socket.sendUndo();
-    }
   };
 
   const redo = () => {
-    // Redo is still local for now (can be extended to WebSocket)
+    if (!canEditRef.current) return;
+    if (socket.isConnected) {
+      socket.sendRedo();
+      return;
+    }
+
     const currentIndex = historyIndexRef.current;
     const currentHistory = historyRef.current;
     
     if (currentIndex < currentHistory.length - 1) {
       const newIndex = currentIndex + 1;
       if (currentHistory[newIndex]) {
-        // Create a deep copy of the history state
         const elementsToRestore = currentHistory[newIndex].map(el => ({ ...el, points: el.points ? [...el.points] : undefined }));
         setElements(elementsToRestore);
         setHistoryIndex(newIndex);
@@ -2476,8 +2515,12 @@ const Whiteboard = ({
 
   const copySelectedRef = useRef(copySelected);
   const pasteElementsRef = useRef(pasteElements);
+  const undoRef = useRef(undo);
+  const redoRef = useRef(redo);
   copySelectedRef.current = copySelected;
   pasteElementsRef.current = pasteElements;
+  undoRef.current = undo;
+  redoRef.current = redo;
 
   useEffect(() => {
     const onCopy = (event: ClipboardEvent) => {
@@ -2489,6 +2532,15 @@ const Whiteboard = ({
     const onKeyDown = (event: KeyboardEvent) => {
       if (!(event.ctrlKey || event.metaKey) || isTypingTarget(event.target) || isTextModeRef.current) return;
       if (event.key.toLowerCase() === "c") copySelectedRef.current();
+      if (event.key.toLowerCase() === "z") {
+        event.preventDefault();
+        if (event.shiftKey) redoRef.current();
+        else undoRef.current();
+      }
+      if (event.key.toLowerCase() === "y") {
+        event.preventDefault();
+        redoRef.current();
+      }
     };
     window.addEventListener("copy", onCopy);
     window.addEventListener("paste", onPaste);
@@ -3031,7 +3083,7 @@ const Whiteboard = ({
                   variant="ghost"
                   size="icon"
                   onClick={undo}
-                  disabled={historyIndex <= 0}
+                  disabled={!canEdit || (socket.isConnected ? !canServerUndo : historyIndex <= 0)}
                   aria-label="Undo"
                   tabIndex={0}
                   className="focus:outline-none focus:ring-2 focus:ring-blue-500"
@@ -3047,7 +3099,7 @@ const Whiteboard = ({
                   variant="ghost"
                   size="icon"
                   onClick={redo}
-                  disabled={historyIndex >= history.length - 1}
+                  disabled={!canEdit || (socket.isConnected ? !canServerRedo : historyIndex >= history.length - 1)}
                   aria-label="Redo"
                   tabIndex={0}
                   className="focus:outline-none focus:ring-2 focus:ring-blue-500"

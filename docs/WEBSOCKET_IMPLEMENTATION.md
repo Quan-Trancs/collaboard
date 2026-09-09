@@ -20,13 +20,13 @@ REST      --auth, board list, title---->  Express
 - `viewport-update` — last camera in Redis (flushed with the next commit or leave)
 - `flush-board` / `clear-board` — persist now, or wipe live + Mongo
 - `cursor-move` — presence at ~20 Hz; broadcast only (not written to Redis)
-- `undo` — last 200 committed actions (in-progress previews skip history)
+- `undo` / `redo` — last 200 committed actions (in-progress previews skip history). Undo pushes onto a redo stack; a new edit clears redo. Applied to the whole room, including the sender.
 - `sync-elements` — seed live hashes
 
 `board-state` payload:
 
 ```ts
-{ objects, drawings, users, cursors, viewport, elements }
+{ objects, drawings, users, cursors, viewport, elements, canUndo, canRedo }
 ```
 
 `elements` is a combined list for older clients.

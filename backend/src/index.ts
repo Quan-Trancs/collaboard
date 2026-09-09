@@ -53,17 +53,18 @@ import {
   upsertLiveItem,
   deleteLiveItem,
   getLiveItem,
-  popHistory,
-  restoreLiveItem,
   syncLiveItems,
   setLiveViewport,
   scheduleBoardFlush,
   flushBoardNow,
   clearBoardLiveItems,
+  undoLiveBoard,
+  redoLiveBoard,
 } from './lib/boardState.js';
 import { isInHardWorld } from './lib/canvasBounds.js';
 import { getBoardAccess } from './lib/boardAccess.js';
 import { seedDevelopmentUser } from './lib/devSeed.js';
+import { redoAppliedPayload, undoAppliedPayload } from './lib/historyEvents.js';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -170,6 +171,8 @@ io.on('connection', (socket: Socket) => {
       cursors: state.cursors,
       viewport: state.viewport,
       elements: [...state.objects, ...state.drawings],
+      canUndo: state.canUndo,
+      canRedo: state.canRedo,
     });
 
     socket.to(`board-${data.boardId}`).emit('user-joined', {
@@ -259,32 +262,27 @@ io.on('connection', (socket: Socket) => {
   });
 
   socket.on('undo', async (data: { boardId: string }) => {
-    if (!currentBoardId || !canEditBoard) return;
-    const lastAction = await popHistory(data.boardId);
-    if (!lastAction) return;
+    if (!currentBoardId || !canEditBoard || data.boardId !== currentBoardId) return;
+    const result = await undoLiveBoard(data.boardId, currentUser?.userId || '');
+    if (!result) return;
+    const payload = undoAppliedPayload(result.entry, currentUser?.userId || '', {
+      canUndo: result.canUndo,
+      canRedo: result.canRedo,
+    });
+    scheduleBoardFlush(data.boardId, currentUser?.userId);
+    io.to(`board-${data.boardId}`).emit('undo-applied', payload);
+  });
 
-    if (lastAction.action === 'add') {
-      await deleteLiveItem(data.boardId, lastAction.element.id, currentUser?.userId || '');
-      socket.to(`board-${data.boardId}`).emit('undo-applied', {
-        action: 'delete',
-        elementId: lastAction.element.id,
-        userId: currentUser?.userId,
-      });
-    } else if (lastAction.action === 'delete') {
-      await restoreLiveItem(data.boardId, lastAction.element);
-      socket.to(`board-${data.boardId}`).emit('undo-applied', {
-        action: 'add',
-        element: lastAction.element,
-        userId: currentUser?.userId,
-      });
-    } else if (lastAction.action === 'update') {
-      socket.to(`board-${data.boardId}`).emit('undo-applied', {
-        action: 'update',
-        elementId: lastAction.element.id,
-        previousState: lastAction.element,
-        userId: currentUser?.userId,
-      });
-    }
+  socket.on('redo', async (data: { boardId: string }) => {
+    if (!currentBoardId || !canEditBoard || data.boardId !== currentBoardId) return;
+    const result = await redoLiveBoard(data.boardId, currentUser?.userId || '');
+    if (!result) return;
+    const payload = redoAppliedPayload(result.entry, currentUser?.userId || '', {
+      canUndo: result.canUndo,
+      canRedo: result.canRedo,
+    });
+    scheduleBoardFlush(data.boardId, currentUser?.userId);
+    io.to(`board-${data.boardId}`).emit('redo-applied', payload);
   });
 
   socket.on('sync-elements', async (data: { boardId: string; elements: any[] }) => {

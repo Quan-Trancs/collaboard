@@ -10,6 +10,7 @@ import { isInHardWorld, assertPointsInHardWorld } from './canvasBounds.js';
 const objectsKey = (boardId: string) => `board:${boardId}:objects`;
 const drawingsKey = (boardId: string) => `board:${boardId}:drawings`;
 const historyKey = (boardId: string) => `board:${boardId}:history`;
+const redoKey = (boardId: string) => `board:${boardId}:redo`;
 const usersKey = (boardId: string) => `board:${boardId}:users`;
 const cursorsKey = (boardId: string) => `board:${boardId}:cursors`;
 const viewportKey = (boardId: string) => `board:${boardId}:viewport`;
@@ -123,12 +124,14 @@ export async function hydrateBoard(boardId: string): Promise<void> {
 export async function getLiveBoardState(boardId: string) {
   await hydrateBoard(boardId);
   const redis = getRedis();
-  const [objects, drawings, users, cursors, viewportRaw] = await Promise.all([
+  const [objects, drawings, users, cursors, viewportRaw, undoCount, redoCount] = await Promise.all([
     redis.hgetall(objectsKey(boardId)),
     redis.hgetall(drawingsKey(boardId)),
     redis.hgetall(usersKey(boardId)),
     redis.hgetall(cursorsKey(boardId)),
     redis.get(viewportKey(boardId)),
+    redis.llen(historyKey(boardId)),
+    redis.llen(redoKey(boardId)),
   ]);
 
   let viewport = null;
@@ -146,13 +149,37 @@ export async function getLiveBoardState(boardId: string) {
     users: parseHash(users),
     cursors: parseHash(cursors),
     viewport,
+    canUndo: undoCount > 0,
+    canRedo: redoCount > 0,
   };
 }
 
-async function writeHistory(boardId: string, entry: Record<string, unknown>) {
+async function writeHistory(
+  boardId: string,
+  entry: Record<string, unknown>,
+  options: { clearRedo?: boolean } = {}
+) {
   const redis = getRedis();
   await redis.lpush(historyKey(boardId), JSON.stringify(entry));
   await redis.ltrim(historyKey(boardId), 0, HISTORY_CAP - 1);
+  if (options.clearRedo !== false) {
+    await redis.del(redoKey(boardId));
+  }
+}
+
+export async function historyCounts(boardId: string) {
+  const redis = getRedis();
+  const [undoCount, redoCount] = await Promise.all([
+    redis.llen(historyKey(boardId)),
+    redis.llen(redoKey(boardId)),
+  ]);
+  return { canUndo: undoCount > 0, canRedo: redoCount > 0 };
+}
+
+export async function pushRedo(boardId: string, entry: Record<string, unknown>) {
+  const redis = getRedis();
+  await redis.lpush(redoKey(boardId), JSON.stringify(entry));
+  await redis.ltrim(redoKey(boardId), 0, HISTORY_CAP - 1);
 }
 
 export async function setUser(
@@ -194,6 +221,7 @@ export async function upsertLiveItem(
   userId: string,
   options: { history?: boolean } = {}
 ) {
+  const previous = action === 'update' ? await getLiveItem(boardId, element.id) : null;
   if (isInkPayload(element)) {
     const points = element.points || [];
     if (points.length && !assertPointsInHardWorld(points)) return false;
@@ -213,6 +241,7 @@ export async function upsertLiveItem(
       id: Date.now().toString(),
       action,
       element,
+      previous: previous || undefined,
       userId,
       timestamp: Date.now(),
       kind: isInkPayload(element) ? 'drawing' : 'object',
@@ -231,7 +260,12 @@ export async function getLiveItem(boardId: string, elementId: string) {
   return raw ? JSON.parse(raw) : null;
 }
 
-export async function deleteLiveItem(boardId: string, elementId: string, userId: string) {
+export async function deleteLiveItem(
+  boardId: string,
+  elementId: string,
+  userId: string,
+  options: { history?: boolean } = {}
+) {
   const existing = await getLiveItem(boardId, elementId);
   if (!existing) return null;
   const redis = getRedis();
@@ -239,14 +273,16 @@ export async function deleteLiveItem(boardId: string, elementId: string, userId:
     redis.hdel(objectsKey(boardId), elementId),
     redis.hdel(drawingsKey(boardId), elementId),
   ]);
-  await writeHistory(boardId, {
-    id: Date.now().toString(),
-    action: 'delete',
-    element: existing,
-    userId,
-    timestamp: Date.now(),
-    kind: isInkPayload(existing) ? 'drawing' : 'object',
-  });
+  if (options.history !== false) {
+    await writeHistory(boardId, {
+      id: Date.now().toString(),
+      action: 'delete',
+      element: existing,
+      userId,
+      timestamp: Date.now(),
+      kind: isInkPayload(existing) ? 'drawing' : 'object',
+    });
+  }
   return existing;
 }
 
@@ -255,12 +291,54 @@ export async function popHistory(boardId: string) {
   return raw ? JSON.parse(raw) : null;
 }
 
+export async function popRedo(boardId: string) {
+  const raw = await getRedis().lpop(redoKey(boardId));
+  return raw ? JSON.parse(raw) : null;
+}
+
 export async function restoreLiveItem(boardId: string, element: any) {
+  if (!element?.id) return;
   if (isInkPayload(element)) {
     await getRedis().hset(drawingsKey(boardId), element.id, JSON.stringify(element));
   } else {
     await getRedis().hset(objectsKey(boardId), element.id, JSON.stringify(element));
   }
+}
+
+async function applyHistoryInverse(boardId: string, entry: any, userId: string) {
+  if (entry.action === 'add' && entry.element?.id) {
+    await deleteLiveItem(boardId, entry.element.id, userId, { history: false });
+  } else if (entry.action === 'delete' && entry.element) {
+    await restoreLiveItem(boardId, entry.element);
+  } else if (entry.action === 'update') {
+    await restoreLiveItem(boardId, entry.previous || entry.element);
+  }
+}
+
+async function applyHistoryForward(boardId: string, entry: any, userId: string) {
+  if (entry.action === 'add' && entry.element) {
+    await restoreLiveItem(boardId, entry.element);
+  } else if (entry.action === 'delete' && entry.element?.id) {
+    await deleteLiveItem(boardId, entry.element.id, userId, { history: false });
+  } else if (entry.action === 'update' && entry.element) {
+    await restoreLiveItem(boardId, entry.element);
+  }
+}
+
+export async function undoLiveBoard(boardId: string, userId: string) {
+  const entry = await popHistory(boardId);
+  if (!entry) return null;
+  await applyHistoryInverse(boardId, entry, userId);
+  await pushRedo(boardId, entry);
+  return { entry, ...(await historyCounts(boardId)) };
+}
+
+export async function redoLiveBoard(boardId: string, userId: string) {
+  const entry = await popRedo(boardId);
+  if (!entry) return null;
+  await applyHistoryForward(boardId, entry, userId);
+  await writeHistory(boardId, entry, { clearRedo: false });
+  return { entry, ...(await historyCounts(boardId)) };
 }
 
 export async function syncLiveItems(boardId: string, elements: any[]) {
@@ -271,7 +349,7 @@ export async function syncLiveItems(boardId: string, elements: any[]) {
 
 export async function clearBoardLiveItems(boardId: string) {
   const redis = getRedis();
-  await redis.del(objectsKey(boardId), drawingsKey(boardId), historyKey(boardId));
+  await redis.del(objectsKey(boardId), drawingsKey(boardId), historyKey(boardId), redoKey(boardId));
   await redis.set(readyKey(boardId), '1');
 }
 
@@ -281,6 +359,7 @@ export async function clearBoardLiveState(boardId: string) {
     objectsKey(boardId),
     drawingsKey(boardId),
     historyKey(boardId),
+    redoKey(boardId),
     usersKey(boardId),
     cursorsKey(boardId),
     viewportKey(boardId),

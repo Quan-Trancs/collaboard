@@ -167,7 +167,11 @@ router.post('/', validate(schemas.createBoard), asyncHandler(async (req: AuthReq
     is_public: is_public || false,
   });
 
-  res.status(201).json(serializeBoard(board));
+  res.status(201).json({
+    ...serializeBoard(board),
+    permission: 'owner',
+    can_edit: true,
+  });
 }));
 
 // Update board
