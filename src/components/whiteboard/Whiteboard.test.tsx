@@ -102,6 +102,77 @@ describe("Whiteboard", () => {
     expect(screen.getByLabelText("Redo")).toBeDisabled();
   });
 
+  it("does not treat remote undo/redo as a local history edit", async () => {
+    let onUndoApplied: ((data: {
+      action: string;
+      elementId?: string;
+      canUndo?: boolean;
+      canRedo?: boolean;
+    }) => void) | undefined;
+    vi.spyOn(useSocketMod, "useSocket").mockReturnValue({
+      socket: { id: "sock-remote" } as never,
+      isConnected: true,
+      boardState: {
+        elements: [],
+        users: [],
+        cursors: [],
+        canUndo: true,
+        canRedo: false,
+      },
+      error: null,
+      sendCursorMove: vi.fn(),
+      sendDrawingStart: vi.fn(),
+      sendDrawingUpdate: vi.fn(),
+      sendElementDelete: vi.fn(),
+      sendUndo: vi.fn(),
+      sendRedo: vi.fn(),
+      sendViewport: vi.fn(),
+      commitDrawing: vi.fn(),
+      flushBoard: vi.fn(),
+      clearBoard: vi.fn(),
+      onElementAdded: vi.fn(() => () => {}),
+      onElementUpdated: vi.fn(() => () => {}),
+      onElementDeleted: vi.fn(() => () => {}),
+      onUndoApplied: vi.fn((callback) => {
+        onUndoApplied = callback;
+        return () => {};
+      }),
+      onRedoApplied: vi.fn(() => () => {}),
+      onCursorUpdate: vi.fn(() => () => {}),
+      onBoardCleared: vi.fn(() => () => {}),
+      onUserLeft: vi.fn(() => () => {}),
+    });
+    stubBoard();
+    render(
+      <TooltipProvider>
+        <Whiteboard
+          boardId={BOARD_ID}
+          user={{ id: "user-1", email: "slide@example.com", name: "Slide User" }}
+          onBackToDashboard={vi.fn()}
+          onLogout={vi.fn()}
+        />
+      </TooltipProvider>
+    );
+
+    await screen.findByRole("heading", { name: "Design Sprint" });
+    await waitFor(() => {
+      expect(screen.getByLabelText("Undo")).toBeEnabled();
+      expect(screen.getByLabelText("Redo")).toBeDisabled();
+    });
+
+    onUndoApplied?.({
+      action: "delete",
+      elementId: "remote-stroke",
+      canUndo: false,
+      canRedo: true,
+    });
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Undo")).toBeDisabled();
+      expect(screen.getByLabelText("Redo")).toBeEnabled();
+    });
+  });
+
   it("changes the zoom label when zooming in", async () => {
     const user = userEvent.setup();
     renderBoard();

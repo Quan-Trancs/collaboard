@@ -712,6 +712,33 @@ const Whiteboard = ({
   // Save to history - use ref to avoid stale closure issues
   const historyRef = useRef<DrawingElement[][]>([]);
   const historyIndexRef = useRef<number>(-1);
+  const skipLocalHistoryRef = useRef(false);
+
+  const snapshotElements = useCallback((items: DrawingElement[]) => {
+    return items.map((el) => ({ ...el, points: el.points ? [...el.points] : undefined }));
+  }, []);
+
+  const rebaseLocalHistory = useCallback((items: DrawingElement[]) => {
+    const nextHistory = [snapshotElements(items)];
+    historyRef.current = nextHistory;
+    historyIndexRef.current = 0;
+    setHistory(nextHistory);
+    setHistoryIndex(0);
+  }, [snapshotElements]);
+
+  const applyRemoteElementsChange = useCallback((updater: (prev: DrawingElement[]) => DrawingElement[]) => {
+    skipLocalHistoryRef.current = true;
+    let next = elementsRef.current;
+    setElements((prev) => {
+      next = updater(prev);
+      elementsRef.current = next;
+      return next;
+    });
+    rebaseLocalHistory(next);
+    queueMicrotask(() => {
+      skipLocalHistoryRef.current = false;
+    });
+  }, [rebaseLocalHistory]);
   
   // Keep refs in sync with state
   useEffect(() => {
@@ -720,22 +747,20 @@ const Whiteboard = ({
   }, [history, historyIndex]);
 
   const saveToHistory = useCallback(() => {
-    // Create a deep copy of current elements
-    const elementsCopy = elementsRef.current.map(el => ({ ...el, points: el.points ? [...el.points] : undefined }));
-    
-    // Use refs to get current values (avoid stale closures)
+    if (skipLocalHistoryRef.current) return;
+
+    const elementsCopy = snapshotElements(elementsRef.current);
     const currentHistory = historyRef.current;
     const currentIndex = historyIndexRef.current;
     
     const newHistory = currentHistory.slice(0, currentIndex + 1);
     newHistory.push(elementsCopy);
     
-    // Update both states
     setHistory(newHistory);
     setHistoryIndex(newHistory.length - 1);
     setCanServerUndo(true);
     setCanServerRedo(false);
-  }, [elements]);
+  }, [snapshotElements]);
 
   // Helper to map database element to DrawingElement
   function mapDatabaseElementToDrawingElement(el: DatabaseElement): DrawingElement {
@@ -1092,7 +1117,7 @@ const Whiteboard = ({
       const serverElements = drawings.length || objects.length
         ? [...drawings, ...objects]
         : socket.boardState.elements.map((el: DatabaseElement) => mapDatabaseElementToDrawingElement(el));
-      setElements(serverElements);
+      applyRemoteElementsChange(() => serverElements);
       if (typeof socket.boardState.canUndo === "boolean") setCanServerUndo(socket.boardState.canUndo);
       if (typeof socket.boardState.canRedo === "boolean") setCanServerRedo(socket.boardState.canRedo);
     }
@@ -1101,9 +1126,8 @@ const Whiteboard = ({
     const unsubscribeAdded = socket.onElementAdded((data: { element: DatabaseElement; userId: string }) => {
       if (data.userId !== user.id) {
         const newElement = mapDatabaseElementToDrawingElement(data.element);
-        setElements((prev) => {
-          // Avoid duplicates
-          if (prev.find(el => el.id === newElement.id)) return prev;
+        applyRemoteElementsChange((prev) => {
+          if (prev.find((el) => el.id === newElement.id)) return prev;
           return [...prev, newElement];
         });
       }
@@ -1112,7 +1136,7 @@ const Whiteboard = ({
     // Listen for element updates
     const unsubscribeUpdated = socket.onElementUpdated((data: { elementId: string; updates: Partial<DatabaseElement['data']>; userId: string }) => {
       if (data.userId !== user.id) {
-        setElements((prev) =>
+        applyRemoteElementsChange((prev) =>
           prev.map((el) =>
             el.id === data.elementId ? { ...el, ...data.updates } : el
           )
@@ -1123,7 +1147,7 @@ const Whiteboard = ({
     // Listen for element deletions
     const unsubscribeDeleted = socket.onElementDeleted((data: { elementId: string; userId: string }) => {
       if (data.userId !== user.id) {
-        setElements((prev) => prev.filter((el) => el.id !== data.elementId));
+        applyRemoteElementsChange((prev) => prev.filter((el) => el.id !== data.elementId));
       }
     });
 
@@ -1138,12 +1162,12 @@ const Whiteboard = ({
       if (typeof data.canUndo === "boolean") setCanServerUndo(data.canUndo);
       if (typeof data.canRedo === "boolean") setCanServerRedo(data.canRedo);
       if (data.action === "delete" && data.elementId) {
-        setElements((prev) => prev.filter((el) => el.id !== data.elementId));
+        applyRemoteElementsChange((prev) => prev.filter((el) => el.id !== data.elementId));
         return;
       }
       if (data.action === "add" && data.element) {
         const newElement = mapDatabaseElementToDrawingElement(data.element);
-        setElements((prev) => {
+        applyRemoteElementsChange((prev) => {
           if (prev.find((el) => el.id === newElement.id)) return prev;
           return [...prev, newElement];
         });
@@ -1153,7 +1177,7 @@ const Whiteboard = ({
         const next = data.element || data.previousState;
         if (!next) return;
         const restoredElement = mapDatabaseElementToDrawingElement(next);
-        setElements((prev) =>
+        applyRemoteElementsChange((prev) =>
           prev.map((el) => (el.id === data.elementId ? restoredElement : el))
         );
       }
@@ -1164,7 +1188,7 @@ const Whiteboard = ({
 
     // Listen for cursor updates
     const unsubscribeCleared = socket.onBoardCleared(() => {
-      setElements([]);
+      applyRemoteElementsChange(() => []);
       setHasUnsavedChanges(false);
     });
 
