@@ -6,6 +6,7 @@ import { boardApi, objectApi, drawingApi } from "@/lib/api";
 import * as useSocketMod from "@/hooks/useSocket";
 import Whiteboard from "./Whiteboard";
 import { serializeElements } from "./boardClipboard";
+import type { BoardPermission } from "@/types";
 
 const BOARD_ID = "507f1f77bcf86cd799439011";
 
@@ -36,7 +37,7 @@ function stubSocket() {
   });
 }
 
-function stubBoard(overrides?: { can_edit?: boolean; permission?: string }) {
+function stubBoard(overrides?: { can_edit?: boolean; permission?: BoardPermission }) {
   vi.spyOn(boardApi, "getBoard").mockResolvedValue({
     id: BOARD_ID,
     title: "Design Sprint",
@@ -59,7 +60,7 @@ function renderBoard(overrides?: {
   onBackToDashboard?: () => void;
   onLogout?: () => void;
   can_edit?: boolean;
-  permission?: string;
+  permission?: BoardPermission;
 }) {
   stubSocket();
   stubBoard({ can_edit: overrides?.can_edit, permission: overrides?.permission });
