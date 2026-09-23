@@ -27,6 +27,7 @@ A real-time collaborative whiteboard application built with React, TypeScript, a
 - **Team Sharing** - Share boards with team members
 - **Permissions Management** - Control access and editing permissions
 - **User Presence** - See who's currently viewing/editing
+- **Board Chat** - Per-board message panel with history and unread badge; view-only collaborators can chat
 - **Last-write-wins on commit** - In-progress previews are not undo history; last committed patch wins
 
 ### User Experience

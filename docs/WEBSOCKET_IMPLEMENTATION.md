@@ -22,6 +22,8 @@ REST      --auth, board list, title---->  Express
 - `cursor-move` — presence at ~20 Hz; broadcast only (not written to Redis)
 - `undo` / `redo` — last 200 committed actions (in-progress previews skip history). Undo pushes onto a redo stack; a new edit clears redo. Applied to the whole room, including the sender.
 - `sync-elements` — seed live hashes
+- `chat-send` — post a board chat message; the server writes it to Mongo `chatmessages` and emits `chat-message` to the whole room (sender included). View-only collaborators can chat. A `clientId` makes resends idempotent; `chat-error` returns the draft text so the client can restore it.
+- `chat-history` — last 100 messages, sent to a socket right after `board-state` on join
 
 `board-state` payload:
 

@@ -4,6 +4,7 @@ import { Board } from '../models/Board.js';
 import { BoardElement } from '../models/BoardElement.js';
 import { SlideObject } from '../models/SlideObject.js';
 import { InkStroke } from '../models/InkStroke.js';
+import { ChatMessage } from '../models/ChatMessage.js';
 import { BoardCollaborator } from '../models/BoardCollaborator.js';
 import { User } from '../models/User.js';
 import { authenticate, AuthRequest } from '../middleware/auth.js';
@@ -257,6 +258,7 @@ router.delete('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
     SlideObject.deleteMany({ board_id: boardObjectId }),
     InkStroke.deleteMany({ board_id: boardObjectId }),
     BoardCollaborator.deleteMany({ board_id: boardObjectId }),
+    ChatMessage.deleteMany({ board_id: boardObjectId }),
     clearBoardLiveState(boardId),
   ]);
 

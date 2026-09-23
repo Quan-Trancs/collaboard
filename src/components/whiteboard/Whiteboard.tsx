@@ -17,8 +17,10 @@ import {
   Plus,
   Move,
   Trash2,
+  MessageSquare,
 } from "lucide-react";
 import ShareModal from "./ShareModal";
+import ChatPanel from "./ChatPanel";
 import InsertPanel from "./InsertPanel";
 import TextStylePanel from "./TextStylePanel";
 import ColorPicker from "./ColorPicker";
@@ -73,6 +75,7 @@ import {
 import { validateAndToast } from "@/lib/validationUtils";
 import { WhiteboardSkeleton, RetryButton, LoadingOverlay } from "@/components/ui/loading";
 import { useSocket } from "@/hooks/useSocket";
+import { isBoardChatTarget } from "@/lib/boardChat";
 import {
   cloneElements,
   dataTransferHasFiles,
@@ -258,6 +261,7 @@ const Whiteboard = ({
   const [history, setHistory] = useState<DrawingElement[][]>([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
   const [showShareModal, setShowShareModal] = useState(false);
+  const [showChat, setShowChat] = useState(false);
   const [isTextMode, setIsTextMode] = useState(false);
   const [textInput, setTextInput] = useState("");
   const [editingTextId, setEditingTextId] = useState<string | null>(null);
@@ -347,6 +351,10 @@ const Whiteboard = ({
     user,
     enabled: isValidBoardId(actualBoardId) && !!user && !!user.id,
   });
+
+  useEffect(() => {
+    if (showChat && socket.unreadChat > 0) socket.markChatRead();
+  }, [showChat, socket.unreadChat, socket.markChatRead]);
 
   // Persistence to database
   const pendingSaveRef = useRef<Set<string>>(new Set());
@@ -1333,10 +1341,12 @@ const Whiteboard = ({
   useEffect(() => {
     const container = containerRef.current;
     const onWheel = (event: WheelEvent) => {
+      if (isBoardChatTarget(event.target)) return;
       event.preventDefault();
     };
     container?.addEventListener("wheel", onWheel, { passive: false });
     const onKeyDown = (e: KeyboardEvent) => {
+      if (isTypingTarget(e.target) || isBoardChatTarget(e.target)) return;
       if (e.code === "Space") spacePressedRef.current = true;
       if (e.key === "Shift") shiftPressedRef.current = true;
     };
@@ -1348,6 +1358,7 @@ const Whiteboard = ({
       e.button === 1 || e.shiftKey || spacePressedRef.current || shiftPressedRef.current;
 
     const onPointerDownCapture = (e: MouseEvent) => {
+      if (isBoardChatTarget(e.target)) return;
       if (!shouldPan(e)) return;
       e.preventDefault();
       e.stopPropagation();
@@ -1372,6 +1383,7 @@ const Whiteboard = ({
   }, [loading]);
 
   const handleWheel = (e: React.WheelEvent<HTMLDivElement>) => {
+    if (isBoardChatTarget(e.target)) return;
     e.preventDefault();
     const container = containerRef.current;
     if (!container) return;
@@ -3219,8 +3231,30 @@ const Whiteboard = ({
               <TooltipContent>Delete Board</TooltipContent>
             </Tooltip>
           </div>
-          <div className="shrink-0 flex items-center gap-2 pl-3 border-l border-gray-200" aria-label="Collaborator list">
+          <div className="shrink-0 flex items-center gap-1 pl-3 border-l border-gray-200">
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => setShowChat((open) => !open)}
+                  aria-label="Chat"
+                  aria-pressed={showChat}
+                  tabIndex={0}
+                  className="relative focus:outline-none focus:ring-2 focus:ring-blue-500"
+                >
+                  <MessageSquare className="h-5 w-5" />
+                  {socket.unreadChat > 0 && !showChat && (
+                    <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-blue-600 px-1 text-[10px] font-semibold text-white">
+                      {socket.unreadChat > 9 ? "9+" : socket.unreadChat}
+                    </span>
+                  )}
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Chat</TooltipContent>
+            </Tooltip>
             <button
+              aria-label="Collaborator list"
               type="button"
               className="flex items-center gap-2 text-left hover:bg-gray-50 rounded-md px-2 py-1"
               onClick={() => setShowShareModal(true)}
@@ -3500,6 +3534,18 @@ const Whiteboard = ({
               </div>
             </div>
           ))}
+          {showChat && (
+            <ChatPanel
+              messages={socket.chatMessages}
+              connected={socket.isConnected}
+              sending={socket.chatSending}
+              currentUserId={user.id}
+              error={socket.chatError}
+              rejectedDraft={socket.rejectedDraft}
+              onClose={() => setShowChat(false)}
+              onSend={socket.sendChat}
+            />
+          )}
         </div>
       </div>
       {/* Share Modal */}

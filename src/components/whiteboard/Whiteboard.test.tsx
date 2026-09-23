@@ -11,7 +11,7 @@ import type { BoardPermission } from "@/types";
 
 const BOARD_ID = "507f1f77bcf86cd799439011";
 
-function stubSocket() {
+function stubSocket(overrides: Partial<ReturnType<typeof useSocketMod.useSocket>> = {}) {
   vi.spyOn(useSocketMod, "useSocket").mockReturnValue({
     socket: null,
     isConnected: false,
@@ -27,6 +27,13 @@ function stubSocket() {
     commitDrawing: vi.fn(),
     flushBoard: vi.fn(),
     clearBoard: vi.fn(),
+    sendChat: vi.fn(),
+    markChatRead: vi.fn(),
+    chatMessages: [],
+    unreadChat: 0,
+    chatError: null,
+    chatSending: false,
+    rejectedDraft: null,
     onElementAdded: vi.fn(() => () => {}),
     onElementUpdated: vi.fn(() => () => {}),
     onElementDeleted: vi.fn(() => () => {}),
@@ -35,6 +42,7 @@ function stubSocket() {
     onCursorUpdate: vi.fn(() => () => {}),
     onBoardCleared: vi.fn(() => () => {}),
     onUserLeft: vi.fn(() => () => {}),
+    ...overrides,
   });
 }
 
@@ -96,6 +104,18 @@ describe("Whiteboard", () => {
     expect(screen.getByText("100%")).toBeInTheDocument();
   });
 
+  it("opens board chat from the header", async () => {
+    const user = userEvent.setup();
+    renderBoard();
+    await screen.findByRole("heading", { name: "Design Sprint" });
+    await user.click(screen.getByLabelText("Chat"));
+    expect(screen.getByLabelText("Board chat")).toBeInTheDocument();
+    expect(screen.getByText("No messages yet. Say hello.")).toBeInTheDocument();
+    expect(screen.getByLabelText("Chat message")).toBeDisabled();
+    await user.click(screen.getByLabelText("Close chat"));
+    expect(screen.queryByLabelText("Board chat")).not.toBeInTheDocument();
+  });
+
   it("locks drawing tools for view-only collaborators", async () => {
     renderBoard({ can_edit: false, permission: "view" });
     expect(await screen.findByText("View only")).toBeInTheDocument();
@@ -111,7 +131,7 @@ describe("Whiteboard", () => {
       canUndo?: boolean;
       canRedo?: boolean;
     }) => void) | undefined;
-    vi.spyOn(useSocketMod, "useSocket").mockReturnValue({
+    stubSocket({
       socket: { id: "sock-remote" } as never,
       isConnected: true,
       boardState: {
@@ -121,28 +141,10 @@ describe("Whiteboard", () => {
         canUndo: true,
         canRedo: false,
       },
-      error: null,
-      sendCursorMove: vi.fn(),
-      sendDrawingStart: vi.fn(),
-      sendDrawingUpdate: vi.fn(),
-      sendElementDelete: vi.fn(),
-      sendUndo: vi.fn(),
-      sendRedo: vi.fn(),
-      sendViewport: vi.fn(),
-      commitDrawing: vi.fn(),
-      flushBoard: vi.fn(),
-      clearBoard: vi.fn(),
-      onElementAdded: vi.fn(() => () => {}),
-      onElementUpdated: vi.fn(() => () => {}),
-      onElementDeleted: vi.fn(() => () => {}),
       onUndoApplied: vi.fn((callback) => {
         onUndoApplied = callback;
         return () => {};
       }),
-      onRedoApplied: vi.fn(() => () => {}),
-      onCursorUpdate: vi.fn(() => () => {}),
-      onBoardCleared: vi.fn(() => () => {}),
-      onUserLeft: vi.fn(() => () => {}),
     });
     stubBoard();
     render(
@@ -230,29 +232,11 @@ describe("Whiteboard", () => {
   it("stops the pen after the mouse is released outside the canvas", async () => {
     const commitDrawing = vi.fn();
     const sendDrawingUpdate = vi.fn();
-    vi.spyOn(useSocketMod, "useSocket").mockReturnValue({
+    stubSocket({
       socket: { id: "sock-1" } as never,
       isConnected: true,
-      boardState: null,
-      error: null,
-      sendCursorMove: vi.fn(),
-      sendDrawingStart: vi.fn(),
       sendDrawingUpdate,
-      sendElementDelete: vi.fn(),
-      sendUndo: vi.fn(),
-    sendRedo: vi.fn(),
-      sendViewport: vi.fn(),
       commitDrawing,
-      flushBoard: vi.fn(),
-      clearBoard: vi.fn(),
-      onElementAdded: vi.fn(() => () => {}),
-      onElementUpdated: vi.fn(() => () => {}),
-      onElementDeleted: vi.fn(() => () => {}),
-      onUndoApplied: vi.fn(() => () => {}),
-    onRedoApplied: vi.fn(() => () => {}),
-      onCursorUpdate: vi.fn(() => () => {}),
-      onBoardCleared: vi.fn(() => () => {}),
-      onUserLeft: vi.fn(() => () => {}),
     });
     stubBoard();
     render(
@@ -282,29 +266,12 @@ describe("Whiteboard", () => {
     const sendDrawingStart = vi.fn();
     const sendDrawingUpdate = vi.fn();
     const commitDrawing = vi.fn();
-    vi.spyOn(useSocketMod, "useSocket").mockReturnValue({
+    stubSocket({
       socket: { id: "sock-1" } as never,
       isConnected: true,
-      boardState: null,
-      error: null,
-      sendCursorMove: vi.fn(),
       sendDrawingStart,
       sendDrawingUpdate,
-      sendElementDelete: vi.fn(),
-      sendUndo: vi.fn(),
-      sendRedo: vi.fn(),
-      sendViewport: vi.fn(),
       commitDrawing,
-      flushBoard: vi.fn(),
-      clearBoard: vi.fn(),
-      onElementAdded: vi.fn(() => () => {}),
-      onElementUpdated: vi.fn(() => () => {}),
-      onElementDeleted: vi.fn(() => () => {}),
-      onUndoApplied: vi.fn(() => () => {}),
-      onRedoApplied: vi.fn(() => () => {}),
-      onCursorUpdate: vi.fn(() => () => {}),
-      onBoardCleared: vi.fn(() => () => {}),
-      onUserLeft: vi.fn(() => () => {}),
     });
     stubBoard();
     render(
@@ -332,29 +299,10 @@ describe("Whiteboard", () => {
 
   it("pastes a copied shape onto the board", async () => {
     const sendDrawingStart = vi.fn();
-    vi.spyOn(useSocketMod, "useSocket").mockReturnValue({
+    stubSocket({
       socket: { id: "sock-1" } as never,
       isConnected: true,
-      boardState: null,
-      error: null,
-      sendCursorMove: vi.fn(),
       sendDrawingStart,
-      sendDrawingUpdate: vi.fn(),
-      sendElementDelete: vi.fn(),
-      sendUndo: vi.fn(),
-    sendRedo: vi.fn(),
-      sendViewport: vi.fn(),
-      commitDrawing: vi.fn(),
-      flushBoard: vi.fn(),
-      clearBoard: vi.fn(),
-      onElementAdded: vi.fn(() => () => {}),
-      onElementUpdated: vi.fn(() => () => {}),
-      onElementDeleted: vi.fn(() => () => {}),
-      onUndoApplied: vi.fn(() => () => {}),
-    onRedoApplied: vi.fn(() => () => {}),
-      onCursorUpdate: vi.fn(() => () => {}),
-      onBoardCleared: vi.fn(() => () => {}),
-      onUserLeft: vi.fn(() => () => {}),
     });
     stubBoard();
     render(
@@ -403,29 +351,11 @@ describe("Whiteboard", () => {
   it("deletes the selected object with Delete", async () => {
     const sendDrawingStart = vi.fn();
     const sendElementDelete = vi.fn();
-    vi.spyOn(useSocketMod, "useSocket").mockReturnValue({
+    stubSocket({
       socket: { id: "sock-1" } as never,
       isConnected: true,
-      boardState: null,
-      error: null,
-      sendCursorMove: vi.fn(),
       sendDrawingStart,
-      sendDrawingUpdate: vi.fn(),
       sendElementDelete,
-      sendUndo: vi.fn(),
-    sendRedo: vi.fn(),
-      sendViewport: vi.fn(),
-      commitDrawing: vi.fn(),
-      flushBoard: vi.fn(),
-      clearBoard: vi.fn(),
-      onElementAdded: vi.fn(() => () => {}),
-      onElementUpdated: vi.fn(() => () => {}),
-      onElementDeleted: vi.fn(() => () => {}),
-      onUndoApplied: vi.fn(() => () => {}),
-    onRedoApplied: vi.fn(() => () => {}),
-      onCursorUpdate: vi.fn(() => () => {}),
-      onBoardCleared: vi.fn(() => () => {}),
-      onUserLeft: vi.fn(() => () => {}),
     });
     stubBoard();
     const user = userEvent.setup();
@@ -472,29 +402,10 @@ describe("Whiteboard", () => {
 
   it("keeps the chosen Insert shape under + and draws it by drag", async () => {
     const sendDrawingStart = vi.fn();
-    vi.spyOn(useSocketMod, "useSocket").mockReturnValue({
+    stubSocket({
       socket: { id: "sock-1" } as never,
       isConnected: true,
-      boardState: null,
-      error: null,
-      sendCursorMove: vi.fn(),
       sendDrawingStart,
-      sendDrawingUpdate: vi.fn(),
-      sendElementDelete: vi.fn(),
-      sendUndo: vi.fn(),
-    sendRedo: vi.fn(),
-      sendViewport: vi.fn(),
-      commitDrawing: vi.fn(),
-      flushBoard: vi.fn(),
-      clearBoard: vi.fn(),
-      onElementAdded: vi.fn(() => () => {}),
-      onElementUpdated: vi.fn(() => () => {}),
-      onElementDeleted: vi.fn(() => () => {}),
-      onUndoApplied: vi.fn(() => () => {}),
-    onRedoApplied: vi.fn(() => () => {}),
-      onCursorUpdate: vi.fn(() => () => {}),
-      onBoardCleared: vi.fn(() => () => {}),
-      onUserLeft: vi.fn(() => () => {}),
     });
     stubBoard();
     const user = userEvent.setup();

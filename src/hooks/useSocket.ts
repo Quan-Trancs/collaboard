@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { io, Socket } from 'socket.io-client';
 import { compactElementPatch, createThrottle, CURSOR_INTERVAL_MS } from '@/lib/livePresence';
+import { createBoardChat, type BoardChatMessage } from '@/lib/boardChat';
 
 interface UseSocketOptions {
   boardId: string;
@@ -23,8 +24,14 @@ export const useSocket = ({ boardId, user, enabled = true }: UseSocketOptions) =
   const socketRef = useRef<Socket | null>(null);
   const [isConnected, setIsConnected] = useState(false);
   const [boardState, setBoardState] = useState<BoardState | null>(null);
+  const [chatMessages, setChatMessages] = useState<BoardChatMessage[]>([]);
+  const [unreadChat, setUnreadChat] = useState(0);
+  const [chatError, setChatError] = useState<string | null>(null);
+  const [chatSending, setChatSending] = useState(false);
+  const [rejectedDraft, setRejectedDraft] = useState<{ text: string; id: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const cursorThrottleRef = useRef(createThrottle(CURSOR_INTERVAL_MS));
+  const chatRef = useRef<ReturnType<typeof createBoardChat> | null>(null);
 
   // Initialize socket connection
   useEffect(() => {
@@ -147,6 +154,20 @@ export const useSocket = ({ boardId, user, enabled = true }: UseSocketOptions) =
       setBoardState(state);
     });
 
+    chatRef.current = createBoardChat({
+      socket,
+      userId: user.id,
+      userName: user.name,
+      boardId,
+      bindings: {
+        onMessages: setChatMessages,
+        onUnread: setUnreadChat,
+        onError: setChatError,
+        onSending: setChatSending,
+        onRejected: setRejectedDraft,
+      },
+    });
+
     // User joined/left events
     socket.on('user-joined', (data: { user: any; socketId: string }) => {
     });
@@ -202,6 +223,12 @@ export const useSocket = ({ boardId, user, enabled = true }: UseSocketOptions) =
         socketRef.current = null;
       }
       cursorThrottleRef.current.cancel();
+      chatRef.current?.dispose();
+      chatRef.current = null;
+      setChatMessages([]);
+      setUnreadChat(0);
+      setChatError(null);
+      setChatSending(false);
       setIsConnected(false);
     };
   }, [boardId, user?.id, user?.name, user?.email, enabled]);
@@ -262,6 +289,15 @@ export const useSocket = ({ boardId, user, enabled = true }: UseSocketOptions) =
     if (!socketRef.current || !isConnected) return;
     socketRef.current.emit('clear-board', { boardId });
   }, [boardId, isConnected]);
+
+  const sendChat = useCallback((text: string) => {
+    if (!isConnected) return;
+    chatRef.current?.send(text);
+  }, [isConnected]);
+
+  const markChatRead = useCallback(() => {
+    chatRef.current?.markRead();
+  }, []);
 
   // Listen to real-time events - these are stable functions
   const onElementAdded = useCallback((callback: (data: any) => void) => {
@@ -343,6 +379,13 @@ export const useSocket = ({ boardId, user, enabled = true }: UseSocketOptions) =
     commitDrawing,
     flushBoard,
     clearBoard,
+    sendChat,
+    markChatRead,
+    chatMessages,
+    unreadChat,
+    chatError,
+    chatSending,
+    rejectedDraft,
     onElementAdded,
     onElementUpdated,
     onElementDeleted,

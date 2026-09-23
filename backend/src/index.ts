@@ -65,6 +65,7 @@ import { isInHardWorld } from './lib/canvasBounds.js';
 import { getBoardAccess } from './lib/boardAccess.js';
 import { seedDevelopmentUser } from './lib/devSeed.js';
 import { redoAppliedPayload, undoAppliedPayload } from './lib/historyEvents.js';
+import { emitChatHistory, registerBoardChat } from './lib/chatSocket.js';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -131,6 +132,10 @@ io.on('connection', (socket: Socket) => {
   let currentBoardId: string | null = null;
   let currentUser: { userId: string; name: string; color: string } | null = null;
   let canEditBoard = false;
+  registerBoardChat(socket, io, {
+    boardId: () => currentBoardId,
+    user: () => currentUser,
+  });
 
   socket.on('disconnect', async () => {
     if (currentBoardId && currentUser) {
@@ -179,6 +184,8 @@ io.on('connection', (socket: Socket) => {
       user: currentUser,
       socketId: socket.id,
     });
+
+    await emitChatHistory(socket, data.boardId);
   });
 
   socket.on('leave-board', async () => {

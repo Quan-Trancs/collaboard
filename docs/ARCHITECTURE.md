@@ -25,6 +25,7 @@ Solid black arrows are the live stream. Gray arrows are REST and store sync. Das
 | Cursor | Socket.IO `cursor-move` | Broadcast only (~20 Hz); clients interpolate |
 | Camera | Socket.IO `viewport-update` | Redis viewport, then board doc |
 | Save / leave / disconnect | Socket flush | Mongo objects + ink |
+| Chat message | Socket.IO `chat-send` | Mongo `chatmessages` directly, then `chat-message` to the room |
 | Join empty room | hydrate | Mongo → Redis |
 
 ## Redis keys
@@ -47,6 +48,7 @@ Solid black arrows are the live stream. Gray arrows are REST and store sync. Das
 | `slideobjects` | Text, shape, image, table, chart, icon |
 | `inkstrokes` | Pen paths |
 | `boardcollaborators` | Share permissions |
+| `chatmessages` | Board chat, last 100 sent on join |
 
 REST `/api/objects` and `/api/drawings` remain as a fallback when the socket is down.
 
