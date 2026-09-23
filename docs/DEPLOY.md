@@ -79,9 +79,11 @@ The API is Express + Socket.IO in `backend/`. It already reads `PORT` (Render se
    | --- | --- |
    | Root directory | `backend` |
    | Runtime | Node |
-   | Build command | `npm install && npm run build` |
+   | Build command | `npm install --include=dev && npm run build` |
    | Start command | `npm start` |
    | Health check path | `/health` |
+
+   Render sets `NODE_ENV=production` during install, which skips `devDependencies`. `--include=dev` (and keeping `@types/*` plus `typescript` in `dependencies`) is what lets `tsc` run on the host.
 
 4. Environment:
 
