@@ -187,6 +187,16 @@ describe("Whiteboard", () => {
     });
   });
 
+  it("zooms with a cancelable wheel event without throwing", async () => {
+    renderBoard();
+    const canvas = await screen.findByLabelText("Whiteboard canvas area");
+    await screen.findByText("100%");
+    fireEvent.wheel(canvas, { deltaY: -100, clientX: 80, clientY: 80, cancelable: true });
+    await waitFor(() => {
+      expect(screen.getByText("110%")).toBeInTheDocument();
+    });
+  });
+
   it("goes back to the dashboard from the toolbar", async () => {
     const onBackToDashboard = vi.fn();
     const user = userEvent.setup();

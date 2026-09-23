@@ -1341,8 +1341,22 @@ const Whiteboard = ({
   useEffect(() => {
     const container = containerRef.current;
     const onWheel = (event: WheelEvent) => {
-      if (isBoardChatTarget(event.target)) return;
+      if (isBoardChatTarget(event.target) || !container) return;
       event.preventDefault();
+      const rect = container.getBoundingClientRect();
+      const screenX = event.clientX - rect.left;
+      const screenY = event.clientY - rect.top;
+      const current = cameraRef.current;
+      const worldX = current.x + screenX / current.zoom;
+      const worldY = current.y + screenY / current.zoom;
+      const nextZoom = clampZoom(current.zoom * (event.deltaY > 0 ? 0.9 : 1.1));
+      const next = applyCamera({
+        zoom: nextZoom,
+        x: worldX - screenX / nextZoom,
+        y: worldY - screenY / nextZoom,
+      });
+      setCamera(next);
+      persistViewport(next);
     };
     container?.addEventListener("wheel", onWheel, { passive: false });
     const onKeyDown = (e: KeyboardEvent) => {
@@ -1380,27 +1394,7 @@ const Whiteboard = ({
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
     };
-  }, [loading]);
-
-  const handleWheel = (e: React.WheelEvent<HTMLDivElement>) => {
-    if (isBoardChatTarget(e.target)) return;
-    e.preventDefault();
-    const container = containerRef.current;
-    if (!container) return;
-    const rect = container.getBoundingClientRect();
-    const screenX = e.clientX - rect.left;
-    const screenY = e.clientY - rect.top;
-    const worldX = camera.x + screenX / camera.zoom;
-    const worldY = camera.y + screenY / camera.zoom;
-    const nextZoom = clampZoom(camera.zoom * (e.deltaY > 0 ? 0.9 : 1.1));
-    const next = applyCamera({
-      zoom: nextZoom,
-      x: worldX - screenX / nextZoom,
-      y: worldY - screenY / nextZoom,
-    });
-    setCamera(next);
-    persistViewport(next);
-  };
+  }, [loading, applyCamera, persistViewport]);
 
   const zoomBy = (factor: number) => {
     const container = containerRef.current;
@@ -3299,7 +3293,6 @@ const Whiteboard = ({
           ref={containerRef}
           className="relative flex-1 overflow-hidden bg-white"
           aria-label="Whiteboard canvas area"
-          onWheel={handleWheel}
           onDragEnter={handleCanvasDragEnter}
           onDragOver={handleCanvasDragOver}
           onDragLeave={handleCanvasDragLeave}
