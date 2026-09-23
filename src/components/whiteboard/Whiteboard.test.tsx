@@ -7,7 +7,7 @@ import * as useSocketMod from "@/hooks/useSocket";
 import Whiteboard from "./Whiteboard";
 import { serializeElements } from "./boardClipboard";
 import { MAX_STROKE_POINTS } from "@/lib/strokeChunks";
-import type { BoardPermission } from "@/types";
+import type { BoardPermission, SlideObject } from "@/types";
 
 const BOARD_ID = "507f1f77bcf86cd799439011";
 
@@ -46,7 +46,11 @@ function stubSocket(overrides: Partial<ReturnType<typeof useSocketMod.useSocket>
   });
 }
 
-function stubBoard(overrides?: { can_edit?: boolean; permission?: BoardPermission }) {
+function stubBoard(overrides?: {
+  can_edit?: boolean;
+  permission?: BoardPermission;
+  objects?: SlideObject[];
+}) {
   vi.spyOn(boardApi, "getBoard").mockResolvedValue({
     id: BOARD_ID,
     title: "Design Sprint",
@@ -55,7 +59,7 @@ function stubBoard(overrides?: { can_edit?: boolean; permission?: BoardPermissio
     created_at: "2026-09-06T00:00:00.000Z",
     updated_at: "2026-09-06T00:00:00.000Z",
     viewport: { x: -2000, y: -2000, zoom: 1 },
-    objects: [],
+    objects: overrides?.objects ?? [],
     drawings: [],
     can_edit: overrides?.can_edit ?? true,
     permission: overrides?.permission ?? "owner",
@@ -70,9 +74,14 @@ function renderBoard(overrides?: {
   onLogout?: () => void;
   can_edit?: boolean;
   permission?: BoardPermission;
+  objects?: SlideObject[];
 }) {
   stubSocket();
-  stubBoard({ can_edit: overrides?.can_edit, permission: overrides?.permission });
+  stubBoard({
+    can_edit: overrides?.can_edit,
+    permission: overrides?.permission,
+    objects: overrides?.objects,
+  });
   return render(
     <TooltipProvider>
       <Whiteboard
@@ -195,6 +204,53 @@ describe("Whiteboard", () => {
     await waitFor(() => {
       expect(screen.getByText("110%")).toBeInTheDocument();
     });
+  });
+
+  it("fits all board content instead of the last saved camera", async () => {
+    renderBoard({
+      objects: [
+        {
+          id: "big-shape",
+          board_id: BOARD_ID,
+          type: "shape",
+          transform: { x: 0, y: 0, width: 4000, height: 3000, rotation: 0 },
+          zIndex: 1,
+          locked: false,
+          visible: true,
+          props: { shapeType: "rectangle" },
+          created_by: "user-1",
+          created_at: "2026-09-06T00:00:00.000Z",
+          updated_at: "2026-09-06T00:00:00.000Z",
+        },
+      ],
+    });
+    await screen.findByRole("heading", { name: "Design Sprint" });
+    await waitFor(() => {
+      expect(screen.queryByText("100%")).not.toBeInTheDocument();
+    });
+  });
+
+  it("pans when shift-dragging the canvas", async () => {
+    const updateBoard = vi.spyOn(boardApi, "updateBoard").mockResolvedValue({} as never);
+    renderBoard();
+    const canvas = await screen.findByLabelText("Drawing canvas");
+    await screen.findByText("100%");
+    fireEvent.pointerDown(canvas, { button: 0, clientX: 240, clientY: 180, shiftKey: true });
+    fireEvent.pointerMove(window, { clientX: 80, clientY: 180, shiftKey: true });
+    fireEvent.pointerUp(window, { button: 0, clientX: 80, clientY: 180 });
+    await waitFor(
+      () => {
+        expect(updateBoard).toHaveBeenCalledWith(
+          BOARD_ID,
+          expect.objectContaining({
+            viewport: expect.objectContaining({ x: expect.any(Number), zoom: 1 }),
+          })
+        );
+      },
+      { timeout: 1500 }
+    );
+    const viewport = updateBoard.mock.calls.find((call) => call[1] && "viewport" in call[1])?.[1]?.viewport;
+    expect(viewport?.x).toBeGreaterThan(-2000);
   });
 
   it("goes back to the dashboard from the toolbar", async () => {

@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useState, useCallback, useMemo } from "react";
+import React, { useRef, useEffect, useLayoutEffect, useState, useCallback, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import {
@@ -57,6 +57,7 @@ import {
   clampPointToRect,
   clampZoom,
   contentLeash,
+  fitCameraToContent,
   MIN_ZOOM,
   MAX_ZOOM,
 } from "@/lib/canvasBounds";
@@ -302,7 +303,10 @@ const Whiteboard = ({
   const [camera, setCamera] = useState<BoardViewport>(DEFAULT_CAMERA);
   const cameraRef = useRef(camera);
   cameraRef.current = camera;
+  const fitOnOpenRef = useRef(true);
   const [isPanning, setIsPanning] = useState(false);
+  const isPanningRef = useRef(false);
+  const [panModifier, setPanModifier] = useState(false);
   const spacePressedRef = useRef(false);
   const shiftPressedRef = useRef(false);
   const panStartRef = useRef<{ x: number; y: number; cameraX: number; cameraY: number } | null>(null);
@@ -986,10 +990,6 @@ const Whiteboard = ({
           setBoardTitle("Untitled Board");
         }
 
-        if (board.viewport) {
-          setCamera(applyCamera(board.viewport));
-        }
-        
         let mappedElements: DrawingElement[] = [];
         try {
           const objects = Array.isArray(board.objects)
@@ -1248,6 +1248,21 @@ const Whiteboard = ({
     return clampCameraPan({ ...next, zoom: clampZoom(next.zoom) }, viewport, getLeash());
   }, [getLeash]);
 
+  useEffect(() => {
+    fitOnOpenRef.current = true;
+  }, [boardId]);
+
+  useLayoutEffect(() => {
+    if (loading || !fitOnOpenRef.current) return;
+    fitOnOpenRef.current = false;
+    const container = containerRef.current;
+    const viewport = {
+      width: container?.clientWidth || window.innerWidth,
+      height: container?.clientHeight || window.innerHeight,
+    };
+    setCamera(fitCameraToContent(boundsFromItems(elements), viewport));
+  }, [loading, elements]);
+
   const persistViewport = useCallback((next: BoardViewport) => {
     if (!isValidBoardId(actualBoardId)) return;
     if (cameraSaveTimerRef.current) window.clearTimeout(cameraSaveTimerRef.current);
@@ -1338,6 +1353,44 @@ const Whiteboard = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [socket.isConnected, getCanvasCoordinates]);
 
+  const beginPan = (clientX: number, clientY: number) => {
+    if (isPanningRef.current && panStartRef.current) return;
+    isPanningRef.current = true;
+    panStartRef.current = {
+      x: clientX,
+      y: clientY,
+      cameraX: cameraRef.current.x,
+      cameraY: cameraRef.current.y,
+    };
+    setIsPanning(true);
+  };
+
+  const movePan = (clientX: number, clientY: number) => {
+    if (!isPanningRef.current || !panStartRef.current) return;
+    const current = cameraRef.current;
+    const next = applyCamera({
+      ...current,
+      x: panStartRef.current.cameraX - (clientX - panStartRef.current.x) / current.zoom,
+      y: panStartRef.current.cameraY - (clientY - panStartRef.current.y) / current.zoom,
+    });
+    setCamera(next);
+  };
+
+  const endPan = () => {
+    if (!isPanningRef.current) return;
+    isPanningRef.current = false;
+    panStartRef.current = null;
+    setIsPanning(false);
+    persistViewport(cameraRef.current);
+  };
+
+  const beginPanRef = useRef(beginPan);
+  const movePanRef = useRef(movePan);
+  const endPanRef = useRef(endPan);
+  beginPanRef.current = beginPan;
+  movePanRef.current = movePan;
+  endPanRef.current = endPan;
+
   useEffect(() => {
     const container = containerRef.current;
     const onWheel = (event: WheelEvent) => {
@@ -1359,40 +1412,66 @@ const Whiteboard = ({
       persistViewport(next);
     };
     container?.addEventListener("wheel", onWheel, { passive: false });
+    const syncPanModifier = () => {
+      setPanModifier(spacePressedRef.current || shiftPressedRef.current);
+    };
     const onKeyDown = (e: KeyboardEvent) => {
       if (isTypingTarget(e.target) || isBoardChatTarget(e.target)) return;
-      if (e.code === "Space") spacePressedRef.current = true;
-      if (e.key === "Shift") shiftPressedRef.current = true;
+      if (e.code === "Space") {
+        e.preventDefault();
+        spacePressedRef.current = true;
+        syncPanModifier();
+      }
+      if (e.key === "Shift") {
+        shiftPressedRef.current = true;
+        syncPanModifier();
+      }
     };
     const onKeyUp = (e: KeyboardEvent) => {
       if (e.code === "Space") spacePressedRef.current = false;
       if (e.key === "Shift") shiftPressedRef.current = false;
+      syncPanModifier();
     };
-    const shouldPan = (e: MouseEvent) =>
+    const shouldPan = (e: MouseEvent | PointerEvent) =>
       e.button === 1 || e.shiftKey || spacePressedRef.current || shiftPressedRef.current;
 
-    const onPointerDownCapture = (e: MouseEvent) => {
+    const onPointerDownCapture = (e: PointerEvent | MouseEvent) => {
       if (isBoardChatTarget(e.target)) return;
       if (!shouldPan(e)) return;
       e.preventDefault();
       e.stopPropagation();
-      setIsPanning(true);
-      panStartRef.current = {
-        x: e.clientX,
-        y: e.clientY,
-        cameraX: cameraRef.current.x,
-        cameraY: cameraRef.current.y,
-      };
+      beginPanRef.current(e.clientX, e.clientY);
+    };
+
+    const onMove = (e: MouseEvent) => movePanRef.current(e.clientX, e.clientY);
+    const onUp = () => endPanRef.current();
+    const onBlur = () => {
+      spacePressedRef.current = false;
+      shiftPressedRef.current = false;
+      syncPanModifier();
+      endPanRef.current();
     };
 
     window.addEventListener("keydown", onKeyDown);
     window.addEventListener("keyup", onKeyUp);
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    window.addEventListener("blur", onBlur);
+    container?.addEventListener("pointerdown", onPointerDownCapture, true);
     container?.addEventListener("mousedown", onPointerDownCapture, true);
     return () => {
       container?.removeEventListener("wheel", onWheel);
+      container?.removeEventListener("pointerdown", onPointerDownCapture, true);
       container?.removeEventListener("mousedown", onPointerDownCapture, true);
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      window.removeEventListener("blur", onBlur);
     };
   }, [loading, applyCamera, persistViewport]);
 
@@ -1416,8 +1495,7 @@ const Whiteboard = ({
   const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement> | React.PointerEvent<HTMLCanvasElement>) => {
     if (e.button === 1 || e.shiftKey || spacePressedRef.current || shiftPressedRef.current || (currentTool === "select" && e.button === 0 && e.altKey)) {
       e.preventDefault();
-      setIsPanning(true);
-      panStartRef.current = { x: e.clientX, y: e.clientY, cameraX: camera.x, cameraY: camera.y };
+      beginPan(e.clientX, e.clientY);
       return;
     }
 
@@ -1637,36 +1715,11 @@ const Whiteboard = ({
     });
   }, [strokeWidth, socket, debouncedSaveToDatabase, saveToHistory]);
 
-  useEffect(() => {
-    if (!isPanning) return;
-
-    const onMove = (e: MouseEvent) => {
-      if (!panStartRef.current) return;
-      const current = cameraRef.current;
-      const next = applyCamera({
-        ...current,
-        x: panStartRef.current.cameraX - (e.clientX - panStartRef.current.x) / current.zoom,
-        y: panStartRef.current.cameraY - (e.clientY - panStartRef.current.y) / current.zoom,
-      });
-      setCamera(next);
-    };
-
-    const onUp = () => {
-      setIsPanning(false);
-      panStartRef.current = null;
-      persistViewport(cameraRef.current);
-    };
-
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
-    return () => {
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
-    };
-  }, [isPanning, applyCamera, persistViewport]);
-
   const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement> | React.PointerEvent<HTMLCanvasElement>) => {
-    if (isPanning) return;
+    if (isPanningRef.current) {
+      movePan(e.clientX, e.clientY);
+      return;
+    }
 
     if (
       (isDrawingRef.current || movingElementRef.current || creatingTextBoxRef.current) &&
@@ -1772,10 +1825,9 @@ const Whiteboard = ({
   };
 
   const handleMouseUp = () => {
-    if (isPanning) {
-      setIsPanning(false);
-      panStartRef.current = null;
-      persistViewport(camera);
+    if (isPanningRef.current) {
+      endPan();
+      return;
     }
     const creating = creatingTextBoxRef.current;
     if (creating) {
@@ -1869,7 +1921,12 @@ const Whiteboard = ({
   }, []);
 
   const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    if (e.button === 0 || e.button === 1) {
+    if (e.button === 1 || e.shiftKey || spacePressedRef.current || shiftPressedRef.current || (currentTool === "select" && e.button === 0 && e.altKey)) {
+      e.preventDefault();
+      beginPan(e.clientX, e.clientY);
+      return;
+    }
+    if (e.button === 0) {
       try {
         e.currentTarget.setPointerCapture(e.pointerId);
       } catch {
@@ -3069,6 +3126,9 @@ const Whiteboard = ({
               <Button variant="ghost" size="icon" onClick={() => zoomBy(1.1)} aria-label="Zoom in">
                 <Plus className="h-4 w-4" />
               </Button>
+              <span className="hidden md:inline text-[10px] text-gray-400 whitespace-nowrap pl-1">
+                Shift+drag to pan
+              </span>
             </div>
             {isEditingTitle ? (
               <input
@@ -3291,8 +3351,9 @@ const Whiteboard = ({
         {/* Canvas Container */}
         <div
           ref={containerRef}
-          className="relative flex-1 overflow-hidden bg-white"
+          className="relative flex-1 overflow-hidden bg-white select-none"
           aria-label="Whiteboard canvas area"
+          title="Hold Shift or Space and drag to pan"
           onDragEnter={handleCanvasDragEnter}
           onDragOver={handleCanvasDragOver}
           onDragLeave={handleCanvasDragLeave}
@@ -3312,7 +3373,7 @@ const Whiteboard = ({
             className="absolute inset-0 w-full h-full bg-transparent"
             style={{
               ...cursorStyle,
-              cursor: isPanning || spacePressedRef.current || shiftPressedRef.current ? "grab" : cursorStyle.cursor,
+              cursor: isPanning || panModifier ? "grab" : cursorStyle.cursor,
               zIndex: currentTool === "select" || isTextMode ? 1 : 4,
             }}
             onPointerDown={handlePointerDown}

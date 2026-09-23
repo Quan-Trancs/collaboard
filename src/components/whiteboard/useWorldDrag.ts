@@ -14,7 +14,7 @@ export function useWorldDrag(
   const startRef = useRef({ clientX: 0, clientY: 0, x: 0, y: 0 });
 
   const onMouseDown = (e: React.MouseEvent) => {
-    if (!enabled || e.button !== 0) return;
+    if (!enabled || e.button !== 0 || e.shiftKey || e.altKey) return;
     e.preventDefault();
     e.stopPropagation();
     startRef.current = {

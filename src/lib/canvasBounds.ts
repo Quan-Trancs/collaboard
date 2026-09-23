@@ -4,6 +4,7 @@ export const CONTENT_LEASH_PADDING = 2000;
 export const EMPTY_WORKSPACE_SIZE = 4000;
 export const MIN_ZOOM = 0.1;
 export const MAX_ZOOM = 4;
+export const FIT_CONTENT_PADDING = 64;
 
 export type Point = { x: number; y: number };
 
@@ -74,9 +75,7 @@ export function unionRects(rects: Rect[]): Rect | null {
 }
 
 export function contentLeash(content: Rect | null): Rect {
-  const grown = content
-    ? expandRect(content, CONTENT_LEASH_PADDING)
-    : emptyWorkspaceRect();
+  const grown = expandRect(content ?? emptyWorkspaceRect(), CONTENT_LEASH_PADDING);
   return intersectRects(grown, hardWorldRect());
 }
 
@@ -128,20 +127,40 @@ export function clampCameraPan(
   const viewW = viewport.width / zoom;
   const viewH = viewport.height / zoom;
 
-  let x = camera.x;
-  let y = camera.y;
+  const minX = Math.min(leash.minX, leash.maxX - viewW);
+  const maxX = Math.max(leash.minX, leash.maxX - viewW);
+  const minY = Math.min(leash.minY, leash.maxY - viewH);
+  const maxY = Math.max(leash.minY, leash.maxY - viewH);
 
-  if (viewW >= leash.maxX - leash.minX) {
-    x = (leash.minX + leash.maxX) / 2 - viewW / 2;
-  } else {
-    x = clamp(x, leash.minX, leash.maxX - viewW);
+  return {
+    x: clamp(camera.x, minX, maxX),
+    y: clamp(camera.y, minY, maxY),
+    zoom,
+  };
+}
+
+export function fitCameraToContent(
+  content: Rect | null,
+  viewport: { width: number; height: number },
+  padding = FIT_CONTENT_PADDING
+): { x: number; y: number; zoom: number } {
+  const viewW = Math.max(1, viewport.width);
+  const viewH = Math.max(1, viewport.height);
+
+  if (!content) {
+    return clampCameraPan(
+      { x: -viewW / 2, y: -viewH / 2, zoom: 1 },
+      viewport,
+      contentLeash(null)
+    );
   }
 
-  if (viewH >= leash.maxY - leash.minY) {
-    y = (leash.minY + leash.maxY) / 2 - viewH / 2;
-  } else {
-    y = clamp(y, leash.minY, leash.maxY - viewH);
-  }
-
-  return { x, y, zoom };
+  const width = Math.max(1, content.maxX - content.minX);
+  const height = Math.max(1, content.maxY - content.minY);
+  const insetX = Math.min(padding, viewW / 4);
+  const insetY = Math.min(padding, viewH / 4);
+  const zoom = clampZoom(Math.min((viewW - insetX * 2) / width, (viewH - insetY * 2) / height));
+  const x = (content.minX + content.maxX) / 2 - viewW / zoom / 2;
+  const y = (content.minY + content.maxY) / 2 - viewH / zoom / 2;
+  return clampCameraPan({ x, y, zoom }, viewport, contentLeash(content));
 }
