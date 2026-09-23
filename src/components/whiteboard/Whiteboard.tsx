@@ -93,6 +93,7 @@ import {
   PREVIEW_INTERVAL_MS,
   type CursorPresence,
 } from "@/lib/livePresence";
+import { appendStrokePoint, expandInkElements, splitInkElement } from "@/lib/strokeChunks";
 
 // Constants - moved outside component to prevent recreation on every render
 const STROKE_WIDTHS = [1, 2, 4, 8] as const;
@@ -791,13 +792,13 @@ const Whiteboard = ({
     return {
       id: el.id,
       type: elementType,
-      x: (el as any).transform?.x ?? el.position?.x ?? 0,
-      y: (el as any).transform?.y ?? el.position?.y ?? 0,
-      width: (el as any).transform?.width ?? el.size?.width,
-      height: (el as any).transform?.height ?? el.size?.height,
-      color: el.data?.color || "#000000",
-      strokeWidth: el.data?.strokeWidth || 2,
-      points: el.data?.points,
+      x: (el as any).transform?.x ?? el.position?.x ?? (el as any).x ?? 0,
+      y: (el as any).transform?.y ?? el.position?.y ?? (el as any).y ?? 0,
+      width: (el as any).transform?.width ?? el.size?.width ?? (el as any).width,
+      height: (el as any).transform?.height ?? el.size?.height ?? (el as any).height,
+      color: el.data?.color || (el as any).color || "#000000",
+      strokeWidth: el.data?.strokeWidth || (el as any).strokeWidth || 2,
+      points: el.data?.points || (el as any).points,
       text: el.data?.text,
       src: el.data?.src,
       alt: el.data?.alt,
@@ -857,9 +858,9 @@ const Whiteboard = ({
     };
   }
 
-  function mapInkStrokeToDrawing(stroke: InkStroke): DrawingElement {
+  function mapInkStrokeToDrawing(stroke: InkStroke): DrawingElement[] {
     const first = stroke.points[0] || { x: 0, y: 0 };
-    return {
+    return splitInkElement({
       id: stroke.id,
       type: "pen",
       x: first.x,
@@ -867,7 +868,7 @@ const Whiteboard = ({
       points: stroke.points,
       color: stroke.color,
       strokeWidth: stroke.strokeWidth,
-    };
+    });
   }
   // Helper to map database collaborator to Collaborator
   function mapDatabaseCollaborator(c: DatabaseCollaborator | { id?: string; name?: string; email?: string; avatar_url?: string; permission?: string }): Collaborator {
@@ -990,7 +991,7 @@ const Whiteboard = ({
             ? board.drawings
             : await drawingApi.getDrawings(currentBoardId);
           mappedElements = [
-            ...drawings.map(mapInkStrokeToDrawing),
+            ...drawings.flatMap(mapInkStrokeToDrawing),
             ...objects.map(mapSlideObjectToDrawing),
           ];
         } catch (elementsError: unknown) {
@@ -1109,7 +1110,7 @@ const Whiteboard = ({
     // Handle board state from server (only on initial connection)
     if (socket.boardState) {
       const drawings = socket.boardState.drawings?.length
-        ? socket.boardState.drawings.map(mapInkStrokeToDrawing)
+        ? socket.boardState.drawings.flatMap(mapInkStrokeToDrawing)
         : [];
       const objects = socket.boardState.objects?.length
         ? socket.boardState.objects.map(mapSlideObjectToDrawing)
@@ -1125,10 +1126,11 @@ const Whiteboard = ({
     // Listen for element additions
     const unsubscribeAdded = socket.onElementAdded((data: { element: DatabaseElement; userId: string }) => {
       if (data.userId !== user.id) {
-        const newElement = mapDatabaseElementToDrawingElement(data.element);
+        const mapped = expandInkElements([mapDatabaseElementToDrawingElement(data.element)]);
         applyRemoteElementsChange((prev) => {
-          if (prev.find((el) => el.id === newElement.id)) return prev;
-          return [...prev, newElement];
+          const existing = new Set(prev.map((el) => el.id));
+          const additions = mapped.filter((el) => !existing.has(el.id));
+          return additions.length ? [...prev, ...additions] : prev;
         });
       }
     });
@@ -1708,17 +1710,45 @@ const Whiteboard = ({
 
     if (!isDrawing || isTextMode || currentTool === "select") return;
 
+    if (currentTool === "pen") {
+      const currentElement = elementsRef.current[elementsRef.current.length - 1];
+      if (!currentElement) return;
+
+      const { current, next } = appendStrokePoint(currentElement, { x, y }, newElementId());
+      const nextList = next
+        ? [...elementsRef.current.slice(0, -1), current, next]
+        : [...elementsRef.current.slice(0, -1), current];
+      elementsRef.current = nextList;
+      setElements(nextList);
+
+      if (socket.isConnected) {
+        if (next) {
+          previewThrottleRef.current.flush();
+          socket.sendDrawingUpdate(current.id, { points: current.points });
+          socket.commitDrawing();
+          socket.sendDrawingStart(next);
+        } else {
+          const points = current.points;
+          previewThrottleRef.current.schedule(() => {
+            socket.sendDrawingUpdate(current.id, { points });
+          });
+        }
+      } else if (next) {
+        setHasUnsavedChanges(true);
+        pendingSaveRef.current.add(current.id);
+        pendingSaveRef.current.add(next.id);
+        debouncedSaveToDatabase();
+      }
+      return;
+    }
+
     setElements((prev) => {
       const newElements = [...prev];
       const currentElement = newElements[newElements.length - 1];
       if (!currentElement) return prev;
 
-      if (currentTool === "pen") {
-        currentElement.points = [...(currentElement.points || []), { x, y }];
-      } else {
-        currentElement.width = (x - currentElement.x);
-        currentElement.height = (y - currentElement.y);
-      }
+      currentElement.width = (x - currentElement.x);
+      currentElement.height = (y - currentElement.y);
       elementsRef.current = newElements;
       return newElements;
     });
@@ -1726,19 +1756,12 @@ const Whiteboard = ({
     if (socket.isConnected) {
       const currentElement = elementsRef.current[elementsRef.current.length - 1];
       if (!currentElement) return;
-      if (currentTool === "pen") {
-        const points = currentElement.points;
-        previewThrottleRef.current.schedule(() => {
-          socket.sendDrawingUpdate(currentElement.id, { points });
+      previewThrottleRef.current.schedule(() => {
+        socket.sendDrawingUpdate(currentElement.id, {
+          width: currentElement.width,
+          height: currentElement.height,
         });
-      } else {
-        previewThrottleRef.current.schedule(() => {
-          socket.sendDrawingUpdate(currentElement.id, {
-            width: currentElement.width,
-            height: currentElement.height,
-          });
-        });
-      }
+      });
     }
   };
 
@@ -2441,6 +2464,7 @@ const Whiteboard = ({
 
   const addBoardElements = useCallback((items: DrawingElement[]) => {
     if (!items.length) return;
+    items = expandInkElements(items);
     elementsRef.current = [...elementsRef.current, ...items];
     setElements(elementsRef.current);
     setHasUnsavedChanges(true);

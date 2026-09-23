@@ -6,6 +6,7 @@ import { InkStroke } from '../models/InkStroke.js';
 import { serializeInkStroke, serializeSlideObject } from './serializers.js';
 import { migrateLegacyElements } from './migrateElements.js';
 import { isInHardWorld, assertPointsInHardWorld } from './canvasBounds.js';
+import { splitInkElement } from './strokeChunks.js';
 
 const objectsKey = (boardId: string) => `board:${boardId}:objects`;
 const drawingsKey = (boardId: string) => `board:${boardId}:drawings`;
@@ -107,7 +108,9 @@ export async function hydrateBoard(boardId: string): Promise<void> {
       const mapping: Record<string, string> = {};
       for (const doc of docs) {
         const serialized = serializeInkStroke(doc);
-        mapping[serialized.id] = JSON.stringify(serialized);
+        for (const piece of splitInkElement(serialized)) {
+          mapping[piece.id] = JSON.stringify(piece);
+        }
       }
       await redis.hset(drawingsKey(boardId), mapping);
     }
@@ -214,14 +217,7 @@ export async function setLiveViewport(boardId: string, viewport: { x: number; y:
   await getRedis().set(viewportKey(boardId), JSON.stringify(viewport));
 }
 
-export async function upsertLiveItem(
-  boardId: string,
-  element: any,
-  action: 'add' | 'update',
-  userId: string,
-  options: { history?: boolean } = {}
-) {
-  const previous = action === 'update' ? await getLiveItem(boardId, element.id) : null;
+async function writeLiveItemHash(boardId: string, element: any) {
   if (isInkPayload(element)) {
     const points = element.points || [];
     if (points.length && !assertPointsInHardWorld(points)) return false;
@@ -229,25 +225,45 @@ export async function upsertLiveItem(
       return false;
     }
     await getRedis().hset(drawingsKey(boardId), element.id, JSON.stringify(element));
-  } else {
-    const x = element.transform?.x ?? element.x;
-    const y = element.transform?.y ?? element.y;
-    if (!isInHardWorld(x, y)) return false;
-    await getRedis().hset(objectsKey(boardId), element.id, JSON.stringify(element));
+    return true;
+  }
+
+  const x = element.transform?.x ?? element.x;
+  const y = element.transform?.y ?? element.y;
+  if (!isInHardWorld(x, y)) return false;
+  await getRedis().hset(objectsKey(boardId), element.id, JSON.stringify(element));
+  return true;
+}
+
+export async function upsertLiveItem(
+  boardId: string,
+  element: any,
+  action: 'add' | 'update',
+  userId: string,
+  options: { history?: boolean } = {}
+): Promise<false | { primary: any; extras: any[] }> {
+  const previous = action === 'update' ? await getLiveItem(boardId, element.id) : null;
+  const pieces = isInkPayload(element) ? splitInkElement(element) : [element];
+  const primary = pieces[0];
+  const extras = pieces.slice(1);
+
+  if (!(await writeLiveItemHash(boardId, primary))) return false;
+  for (const extra of extras) {
+    if (!(await writeLiveItemHash(boardId, extra))) return false;
   }
 
   if (options.history !== false) {
     await writeHistory(boardId, {
       id: Date.now().toString(),
       action,
-      element,
+      element: primary,
       previous: previous || undefined,
       userId,
       timestamp: Date.now(),
       kind: isInkPayload(element) ? 'drawing' : 'object',
     });
   }
-  return true;
+  return { primary, extras };
 }
 
 export async function getLiveItem(boardId: string, elementId: string) {

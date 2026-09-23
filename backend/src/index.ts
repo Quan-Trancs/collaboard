@@ -222,9 +222,15 @@ io.on('connection', (socket: Socket) => {
     if (!accepted) return;
 
     socket.to(`board-${data.boardId}`).emit('element-added', {
-      element: data.element,
+      element: accepted.primary,
       userId: currentUser?.userId,
     });
+    for (const extra of accepted.extras) {
+      socket.to(`board-${data.boardId}`).emit('element-added', {
+        element: extra,
+        userId: currentUser?.userId,
+      });
+    }
   });
 
   socket.on('drawing-update', async (data: { boardId: string; elementId: string; updates: any }) => {
@@ -242,11 +248,20 @@ io.on('connection', (socket: Socket) => {
     );
     if (!accepted) return;
 
+    const updates = accepted.extras.length && accepted.primary.points
+      ? { ...data.updates, points: accepted.primary.points }
+      : data.updates;
     socket.to(`board-${data.boardId}`).emit('element-updated', {
       elementId: data.elementId,
-      updates: data.updates,
+      updates,
       userId: currentUser?.userId,
     });
+    for (const extra of accepted.extras) {
+      socket.to(`board-${data.boardId}`).emit('element-added', {
+        element: extra,
+        userId: currentUser?.userId,
+      });
+    }
   });
 
   socket.on('element-delete', async (data: { boardId: string; elementId: string }) => {

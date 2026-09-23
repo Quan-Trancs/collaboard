@@ -4,6 +4,17 @@
 
 import { Request, Response, NextFunction } from 'express';
 import Joi from 'joi';
+import { MAX_STROKE_REQUEST_POINTS } from '../lib/strokeChunks.js';
+
+const inkPoints = (required = false) => {
+  const schema = Joi.array().items(
+    Joi.object({
+      x: Joi.number().required(),
+      y: Joi.number().required(),
+    })
+  ).min(2).max(MAX_STROKE_REQUEST_POINTS);
+  return required ? schema.required() : schema.optional();
+};
 
 export const validate = (schema: Joi.ObjectSchema) => {
   return (req: Request, res: Response, next: NextFunction) => {
@@ -144,23 +155,13 @@ export const schemas = {
 
   createInkStroke: Joi.object({
     board_id: Joi.string().required(),
-    points: Joi.array().items(
-      Joi.object({
-        x: Joi.number().required(),
-        y: Joi.number().required(),
-      })
-    ).min(2).required(),
+    points: inkPoints(true),
     color: Joi.string().required(),
     strokeWidth: Joi.number().min(1).required(),
   }),
 
   updateInkStroke: Joi.object({
-    points: Joi.array().items(
-      Joi.object({
-        x: Joi.number().required(),
-        y: Joi.number().required(),
-      })
-    ).min(2).optional(),
+    points: inkPoints(),
     color: Joi.string().optional(),
     strokeWidth: Joi.number().min(1).optional(),
   }),
@@ -170,12 +171,7 @@ export const schemas = {
     strokes: Joi.array().items(
       Joi.object({
         id: Joi.string().optional(),
-        points: Joi.array().items(
-          Joi.object({
-            x: Joi.number().required(),
-            y: Joi.number().required(),
-          })
-        ).min(2).required(),
+        points: inkPoints(true),
         color: Joi.string().required(),
         strokeWidth: Joi.number().min(1).required(),
       })

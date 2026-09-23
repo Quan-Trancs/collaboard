@@ -157,6 +157,7 @@ collaboard/
 ## Documentation
 
 - [Architecture topology](./docs/ARCHITECTURE.md) - Stream vs REST, Redis, Mongo, presence/commit
+- [Production deploy](./docs/DEPLOY.md) - Vercel frontend, Render API, Atlas, Redis
 - [MongoDB Setup Guide](./docs/MONGODB_SETUP.md) - Database setup instructions
 - [WebSocket Implementation](./docs/WEBSOCKET_IMPLEMENTATION.md) - Events, persistence, and client presence
 

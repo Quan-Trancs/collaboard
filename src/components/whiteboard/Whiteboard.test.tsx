@@ -6,6 +6,7 @@ import { boardApi, objectApi, drawingApi } from "@/lib/api";
 import * as useSocketMod from "@/hooks/useSocket";
 import Whiteboard from "./Whiteboard";
 import { serializeElements } from "./boardClipboard";
+import { MAX_STROKE_POINTS } from "@/lib/strokeChunks";
 import type { BoardPermission } from "@/types";
 
 const BOARD_ID = "507f1f77bcf86cd799439011";
@@ -275,6 +276,58 @@ describe("Whiteboard", () => {
     const commits = commitDrawing.mock.calls.length;
     fireEvent.pointerMove(canvas, { clientX: 200, clientY: 180, buttons: 0 });
     expect(commitDrawing.mock.calls.length).toBe(commits);
+  });
+
+  it("splits a long pen stroke into a new socket element", async () => {
+    const sendDrawingStart = vi.fn();
+    const sendDrawingUpdate = vi.fn();
+    const commitDrawing = vi.fn();
+    vi.spyOn(useSocketMod, "useSocket").mockReturnValue({
+      socket: { id: "sock-1" } as never,
+      isConnected: true,
+      boardState: null,
+      error: null,
+      sendCursorMove: vi.fn(),
+      sendDrawingStart,
+      sendDrawingUpdate,
+      sendElementDelete: vi.fn(),
+      sendUndo: vi.fn(),
+      sendRedo: vi.fn(),
+      sendViewport: vi.fn(),
+      commitDrawing,
+      flushBoard: vi.fn(),
+      clearBoard: vi.fn(),
+      onElementAdded: vi.fn(() => () => {}),
+      onElementUpdated: vi.fn(() => () => {}),
+      onElementDeleted: vi.fn(() => () => {}),
+      onUndoApplied: vi.fn(() => () => {}),
+      onRedoApplied: vi.fn(() => () => {}),
+      onCursorUpdate: vi.fn(() => () => {}),
+      onBoardCleared: vi.fn(() => () => {}),
+      onUserLeft: vi.fn(() => () => {}),
+    });
+    stubBoard();
+    render(
+      <TooltipProvider>
+        <Whiteboard
+          boardId={BOARD_ID}
+          user={{ id: "user-1", email: "slide@example.com", name: "Slide User" }}
+          onBackToDashboard={vi.fn()}
+          onLogout={vi.fn()}
+        />
+      </TooltipProvider>
+    );
+
+    const canvas = await screen.findByLabelText("Drawing canvas");
+    fireEvent.pointerDown(canvas, { clientX: 40, clientY: 40, button: 0, buttons: 1 });
+    for (let index = 1; index <= MAX_STROKE_POINTS; index += 1) {
+      fireEvent.pointerMove(canvas, { clientX: 40 + index, clientY: 40, buttons: 1 });
+    }
+
+    expect(commitDrawing).toHaveBeenCalled();
+    expect(sendDrawingStart.mock.calls.length).toBeGreaterThanOrEqual(2);
+    const lastStart = sendDrawingStart.mock.calls.at(-1)?.[0];
+    expect(lastStart.points.length).toBeLessThanOrEqual(MAX_STROKE_POINTS);
   });
 
   it("pastes a copied shape onto the board", async () => {
