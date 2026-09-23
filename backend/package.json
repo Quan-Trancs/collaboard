@@ -8,7 +8,8 @@
     "start": "node dist/index.js",
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
-    "test": "tsx --test src/lib/boardAccess.test.ts src/lib/devSeed.test.ts src/lib/historyEvents.test.ts src/lib/strokeChunks.test.ts src/lib/chat.test.ts",
+    "test": "tsx --test src/lib/boardAccess.test.ts src/lib/devSeed.test.ts src/lib/historyEvents.test.ts src/lib/strokeChunks.test.ts src/lib/chat.test.ts src/lib/keepClusterAwake.test.ts",
+    "keep-cluster-awake": "tsx scripts/keepClusterAwake.ts",
     "delete-all-boards": "tsx scripts/deleteAllBoards.ts"
   },
   "dependencies": {

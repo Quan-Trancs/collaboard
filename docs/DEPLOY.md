@@ -19,7 +19,17 @@ This is enough for a public demo (register, draw, second browser). It is not an 
 
 **Pick Redis Cloud** if you want a real TCP Redis for `ioredis` and the Socket.IO adapter. Use Upstash only for a short demo.
 
-Always-on without sleep means ~$5/month (Render starter / Railway) or an always-free VM (Oracle), not more architecture.
+Do **not** use AWS for this deploy (no EC2, Lightsail, ElastiCache, DocumentDB, or Lambda). Socket.IO needs a long-lived Node process; AWS free tier is credits for a few months, not a lasting $0 host.
+
+Always-on without sleep means ~$5/month on **Render Starter** or **Railway Hobby**, not more architecture.
+
+### Host choices (no AWS)
+
+| Option | Stack | When to use |
+| --- | --- | --- |
+| **A. Free demo (do this first)** | Vercel + Render free + Atlas M0 + Redis Cloud | $0 public demo. Render sleeps when idle. |
+| **B. Always-on cheap** | Vercel + Render Starter or Railway + Atlas + Redis Cloud | ~$5–7/month. Sockets stay up. |
+| **C. Oracle always-free VM** | Vercel + one VM for the API (+ Redis in Docker) + Atlas | $0 and always-on, more setup. Optional later. |
 
 ## 1. MongoDB Atlas
 
@@ -36,6 +46,10 @@ MONGODB_URI=mongodb+srv://USER:PASSWORD@cluster0.xxxxx.mongodb.net/collaboard?re
 ```
 
 Do not commit this URI.
+
+Atlas M0 pauses after about 60 days with no connections. Render free sleeps, so the API will not touch Atlas while nobody is using the app. `.github/workflows/mongo-keepalive.yml` runs `keepClusterAwake` on the 1st and 16th of each month (about every 15 days). It only opens a connection and sends `ping`.
+
+Add the same Atlas URI as a GitHub Actions secret named `MONGODB_URI` (Settings → Secrets and variables → Actions). Network Access must allow the runner. `0.0.0.0/0` from the step above covers that. Run the workflow once with **Run workflow** to confirm it is green. GitHub turns scheduled workflows off after 60 days with no commits in the repo.
 
 ## 2. Redis
 

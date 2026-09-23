@@ -1,0 +1,24 @@
+name: Keep MongoDB cluster awake
+
+on:
+  schedule:
+    # 12:00 UTC on the 1st and 16th. GitHub cron has no "every 15 days" field.
+    - cron: "0 12 1,16 * *"
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - run: npm ci
+        working-directory: backend
+      - run: npx tsx scripts/keepClusterAwake.ts
+        working-directory: backend
+        env:
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}
