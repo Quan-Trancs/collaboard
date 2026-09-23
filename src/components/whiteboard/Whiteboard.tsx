@@ -155,6 +155,13 @@ function hitTestElement(
 
 const DEFAULT_CAMERA: BoardViewport = { x: -2000, y: -2000, zoom: 1 };
 
+const MOVE_CURSOR = (() => {
+  const arrows =
+    "M12 3v18M3 12h18M12 3l-3 3M12 3l3 3M12 21l-3-3M12 21l3-3M3 12l3-3M3 12l3 3M21 12l-3-3M21 12l-3 3";
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="${arrows}" stroke="#000000" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="${arrows}" stroke="#ffffff" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+  return `url("data:image/svg+xml;utf8,${encodeURIComponent(svg)}") 12 12, grab`;
+})();
+
 // Type definitions for database responses
 interface DatabaseElement {
   id: string;
@@ -526,6 +533,11 @@ const Whiteboard = ({
     // Horizontal line: left segment, gap, right segment
     // Vertical line: top segment, gap, bottom segment
     const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">
+      <circle cx="${center}" cy="${center}" r="${radius + 1}" fill="#000000"/>
+      <line x1="${center - offset - crossLength}" y1="${center}" x2="${center - offset}" y2="${center}" stroke="#000000" stroke-width="2.5" stroke-linecap="round"/>
+      <line x1="${center + offset}" y1="${center}" x2="${center + offset + crossLength}" y2="${center}" stroke="#000000" stroke-width="2.5" stroke-linecap="round"/>
+      <line x1="${center}" y1="${center - offset - crossLength}" x2="${center}" y2="${center - offset}" stroke="#000000" stroke-width="2.5" stroke-linecap="round"/>
+      <line x1="${center}" y1="${center + offset}" x2="${center}" y2="${center + offset + crossLength}" stroke="#000000" stroke-width="2.5" stroke-linecap="round"/>
       <circle cx="${center}" cy="${center}" r="${radius}" fill="${currentColor}"/>
       <line x1="${center - offset - crossLength}" y1="${center}" x2="${center - offset}" y2="${center}" stroke="${currentColor}" stroke-width="1" stroke-linecap="round"/>
       <line x1="${center + offset}" y1="${center}" x2="${center + offset + crossLength}" y2="${center}" stroke="${currentColor}" stroke-width="1" stroke-linecap="round"/>
@@ -3373,7 +3385,7 @@ const Whiteboard = ({
             className="absolute inset-0 w-full h-full bg-transparent"
             style={{
               ...cursorStyle,
-              cursor: isPanning || panModifier ? "grab" : cursorStyle.cursor,
+              cursor: isPanning || panModifier ? MOVE_CURSOR : cursorStyle.cursor,
               zIndex: currentTool === "select" || isTextMode ? 1 : 4,
             }}
             onPointerDown={handlePointerDown}
