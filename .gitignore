@@ -43,6 +43,8 @@ dist-ssr/
 .env.*.local
 mongodb-user.txt
 backend/mongodb-user.txt
+redis-user.txt
+backend/redis-user.txt
 
 # IDE
 .vscode/*

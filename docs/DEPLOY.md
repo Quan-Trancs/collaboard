@@ -116,21 +116,80 @@ If the first request after idle is slow, that is Render sleep. Open `/health` on
 
 ## 4. Frontend on Vercel
 
-Vite bakes `VITE_*` in at **build** time. Changing env without a redeploy does nothing.
+The React app lives at the **repo root**, not in `backend/`. Vercel only serves the built static files. All API and socket traffic goes to Render.
 
-1. Import this repo (root is the frontend). Framework: Vite. Build: `npm run build`. Output: `dist`.
-2. Production environment variables:
+Vite bakes `VITE_*` into the JS at **build** time. Changing env on Vercel does nothing until you **Redeploy**.
 
-   ```env
-   VITE_API_URL=https://YOUR-API.onrender.com/api
-   VITE_SOCKET_URL=https://YOUR-API.onrender.com
-   ```
+You need the Render URL first (step 3). Example: `https://collaboard-api.onrender.com`.
 
-   No trailing slash on `VITE_SOCKET_URL`. `VITE_API_URL` must end with `/api`.
-3. Redeploy.
-4. Put the exact Vercel origin (scheme + host, no path) in the API `CORS_ORIGIN`. If you use a custom domain, use that, not the `.vercel.app` URL.
+### Create the project
 
-Do not set `VITE_TEMPO` in production.
+1. Open [vercel.com](https://vercel.com) and sign in with GitHub.
+2. **Add New…** → **Project**.
+3. Import the **collaboard** repo (the same one Render uses).
+4. Leave **Root Directory** as `.` (repo root). Do **not** set it to `backend`.
+5. Framework Preset: **Vite**. Vercel should fill in:
+
+   | Field | Value |
+   | --- | --- |
+   | Build Command | `npm run build` |
+   | Output Directory | `dist` |
+   | Install Command | `npm install` |
+
+   If the preset is empty, type those in. Node 18+ is fine.
+6. **Do not deploy yet.** Open **Environment Variables** on this screen (or **Environment Variables** after create, then redeploy).
+
+### Environment variables
+
+Add these for **Production** (and Preview if you want PR deploys to hit the same API):
+
+| Name | Value | Notes |
+| --- | --- | --- |
+| `VITE_API_URL` | `https://YOUR-API.onrender.com/api` | Must end with `/api`. No trailing slash after `api`. |
+| `VITE_SOCKET_URL` | `https://YOUR-API.onrender.com` | Same host as the API, **no** `/api`, **no** trailing slash. |
+
+Wrong:
+
+```env
+VITE_API_URL=https://YOUR-API.onrender.com
+VITE_API_URL=https://YOUR-API.onrender.com/api/
+VITE_SOCKET_URL=https://YOUR-API.onrender.com/api
+VITE_SOCKET_URL=https://YOUR-API.onrender.com/
+```
+
+Right:
+
+```env
+VITE_API_URL=https://YOUR-API.onrender.com/api
+VITE_SOCKET_URL=https://YOUR-API.onrender.com
+```
+
+Do **not** set `VITE_TEMPO`. Do **not** put `MONGODB_URI`, `REDIS_URL`, or `JWT_SECRET` on Vercel. Those belong on Render only.
+
+### Deploy
+
+1. **Deploy**. Wait until the build is green. `tsc --noEmit && vite build` must pass.
+2. Open the `.vercel.app` URL. You should see sign-in, **not** "Use demo account".
+3. Copy the origin only: `https://YOUR-APP.vercel.app` (no path, no trailing slash).
+
+### Point Render CORS at Vercel
+
+1. Render → the web service → **Environment**.
+2. Set `CORS_ORIGIN` to that exact Vercel origin.
+3. Save. Render restarts the API.
+4. If you later add a custom domain on Vercel, change `CORS_ORIGIN` to `https://your-domain.com` and restart again.
+
+Until `CORS_ORIGIN` matches the browser origin, login and sockets fail even if the URLs look right.
+
+### If something is wrong
+
+| Symptom | Likely cause |
+| --- | --- |
+| Login fails / network error | `VITE_API_URL` missing `/api`, or you changed env and did not redeploy |
+| Sign-in works, drawing / chat does not | `VITE_SOCKET_URL` has `/api` or a trailing slash |
+| Browser CORS error | `CORS_ORIGIN` on Render is not the exact Vercel origin |
+| First load is slow, then it works | Render free slept; open `https://YOUR-API.onrender.com/health` once |
+| Build fails on Vercel | Root directory is `backend`, or Node is too old |
 
 ## 5. Smoke test
 
